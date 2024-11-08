@@ -1,9 +1,16 @@
 const std = @import("std");
 const rl = @import("raylib");
 const rg = @import("raygui");
+const math = @import("math.zig");
 
 const GameTexture = rl.Rectangle;
+const ItemID = usize;
+
 const FIELD_SIZE: f32 = 16.0;
+const TOUCH_DELAY: f32 = 0.2;
+const DRAG_THRESHOLD: f32 = 64.0;
+const TOUCH_RADIUS: f32 = 0.5;
+const DOUBLE_DELAY: f32 = 0.2;
 
 pub const GameState = struct {
     alloc: std.mem.Allocator,
@@ -12,13 +19,21 @@ pub const GameState = struct {
     camera_zoom: f32,
     camera_position: rl.Vector2,
     camera_rotation: f32,
-    items: std.ArrayList(TableItem),
+    camera_snap: bool,
+    atlas: rl.Texture,
+    items: std.ArrayList(Item), // TODO: Make this into a hashmap
+    dragging: ?usize,
     hand: std.ArrayList(Card),
     touch_state: TouchState,
 
     const TouchState = union(enum) {
-        none,
-        single: rl.Vector2,
+        none: f32,
+        single: struct {
+            rl.Vector2,
+            rl.Vector2,
+            f32,
+            bool,
+        },
         double: struct {
             rl.Vector2,
             rl.Vector2,
@@ -43,33 +58,144 @@ pub const GameState = struct {
             .camera_zoom = 1.0,
             .camera_position = rl.Vector2{ .x = 0.0, .y = 0.0 },
             .camera_rotation = 0.0,
-            .items = std.ArrayList(TableItem).init(alloc),
+            .camera_snap = true,
+            .atlas = blk: {
+                var texture = rl.loadTexture("assets/debug.png");
+                rl.genTextureMipmaps(&texture);
+                break :blk texture;
+            },
+            .dragging = null,
+            .items = blk: {
+                var items = std.ArrayList(Item).init(alloc);
+                for (0..3) |i| {
+                    items.append(Item{
+                        .size = rl.Vector2.init(1.0, 1.0),
+                        .position = rl.Vector2.zero(),
+                        .rotation = 0.0,
+                        .storage = Item.Storage{ .card = Card{
+                            .parent = 3,
+                            .face_up = true,
+                            .face_texture = GameTexture.init(@as(f32, @floatFromInt(i + 1)) * 16.0 + 128.0, 0.0, 16.0, 16.0),
+                            .back_texture = GameTexture.init(128.0, 0.0, 16.0, 16.0),
+                        } },
+                    }) catch unreachable;
+                }
+                items.append(Item{
+                    .size = rl.Vector2.init(1.0, 1.0),
+                    .position = rl.Vector2.zero(),
+                    .rotation = 0.0,
+                    .storage = Item.Storage{ .deck = Deck{
+                        .cards = blk2: {
+                            var cards = std.ArrayList(ItemID).init(alloc);
+                            cards.appendSlice(&.{ 0, 1, 2 }) catch unreachable;
+                            break :blk2 cards;
+                        },
+                        .texture = GameTexture.init(128.0, 64.0, 32.0, 32.0),
+                    } },
+                }) catch unreachable;
+                break :blk items;
+            },
             .hand = std.ArrayList(Card).init(alloc),
-            .touch_state = TouchState.none,
+            .touch_state = TouchState{ .none = 0.0 },
         };
     }
     pub fn deinit(self: *Self) void {
+        rl.unloadTexture(self.atlas);
+        for (self.items.items) |item| {
+            switch (item.storage) {
+                Item.Storage.deck => |deck| {
+                    deck.cards.deinit();
+                },
+                Item.Storage.stack => |stack| {
+                    stack.cards.deinit();
+                },
+                else => {},
+            }
+        }
         self.items.deinit();
         self.hand.deinit();
     }
     pub fn update(self: *Self, delta: f32) void {
-        _ = delta;
         const touch_points = rl.getTouchPointCount();
-        switch (touch_points) {
+        switch (touch_points) { // God damn it, someone's gotta unravel this spaghetti
             else => {
                 if (self.touch_state != TouchState.none) {
-                    self.touch_state = TouchState.none;
+                    self.touch_state = TouchState{ .none = 0.0 };
+
+                    self.dragging = null;
+
+                    // Probaby has to be put in a separate function
+                    self.camera_snap = false;
+                    if (self.camera_zoom >= 16.0) {
+                        self.camera_zoom = 16.0;
+                    }
+                    if (self.camera_zoom < 0.5) {
+                        self.camera_zoom = 0.5;
+                    }
+                    if (self.camera_position.x > FIELD_SIZE) {
+                        self.camera_position.x = FIELD_SIZE;
+                    }
+                    if (self.camera_position.y > FIELD_SIZE) {
+                        self.camera_position.y = FIELD_SIZE;
+                    }
+                    if (self.camera_position.x < -FIELD_SIZE) {
+                        self.camera_position.x = -FIELD_SIZE;
+                    }
+                    if (self.camera_position.y < -FIELD_SIZE) {
+                        self.camera_position.y = -FIELD_SIZE;
+                    }
+                    // NOTE: Snap angles to 45 degress for now.
+                    const angles: [8]f32 = .{
+                        0.0,
+                        std.math.pi * 0.25,
+                        std.math.pi * 0.5,
+                        std.math.pi * 0.75,
+                        std.math.pi,
+                        std.math.pi * 1.25,
+                        std.math.pi * 1.5,
+                        std.math.pi * 1.75,
+                    };
+                    var best_angle: usize = 0;
+                    for (1..angles.len) |i| {
+                        // TODO: Compare angles properly
+                        if (@abs(self.camera_rotation - angles[i]) < @abs(self.camera_rotation - angles[best_angle])) {
+                            best_angle = i;
+                        }
+                    }
+                    self.camera_rotation = angles[best_angle];
+                } else {
+                    self.touch_state.none += delta;
                 }
             },
             1 => {
                 const position = rl.getTouchPosition(0);
                 if (self.touch_state != TouchState.single) {
-                    self.touch_state = TouchState{ .single = position };
+                    self.camera_snap = true;
+                    if (self.touch_state == TouchState.none and self.touch_state.none <= DOUBLE_DELAY) {
+                        // TODO: Tap-drag
+                        self.touch_state = TouchState{ .single = .{ position, position, 0.0, true } };
+                    } else {
+                        self.touch_state = TouchState{ .single = .{ position, position, 0.0, false } };
+                    }
                 } else {
-                    const world_delta = rl.getScreenToWorld2D(position, self.camera)
-                        .subtract(rl.getScreenToWorld2D(self.touch_state.single, self.camera));
-                    self.camera_position = self.camera_position.subtract(world_delta);
-                    self.touch_state = TouchState{ .single = position };
+                    self.touch_state.single[1] = position;
+                    const less = self.touch_state.single[2] < TOUCH_DELAY;
+                    self.touch_state.single[2] += delta;
+                    if (less and !self.touch_state.single[3]) {
+                        if (self.touch_state.single[0].distanceSqr(self.touch_state.single[1]) >= DRAG_THRESHOLD) {
+                            // Drag
+                            self.touch_state.single[3] = true;
+                            self.dragging = self.find_nearest_draggable(
+                                rl.getScreenToWorld2D(self.touch_state.single[0], self.camera),
+                                TOUCH_RADIUS,
+                            );
+                        } else if (self.touch_state.single[2] >= TOUCH_DELAY) {
+                            // Hold
+                        }
+                    }
+                    if (self.dragging) |dragging| {
+                        self.items.items[dragging].position = rl.getScreenToWorld2D(position, self.camera);
+                    }
                 }
             },
             2 => {
@@ -78,7 +204,7 @@ pub const GameState = struct {
                 if (self.touch_state != TouchState.double) {
                     // That's IMPOSSIBLE, duh
                     if (position1.equals(position2) == 0) {
-                        std.debug.print("Initializing pinch calculation\n", .{});
+                        self.camera_snap = true;
                         self.touch_state = TouchState{ .double = .{
                             position1,
                             position2,
@@ -130,43 +256,169 @@ pub const GameState = struct {
                 }
             },
         }
-    }
-    pub fn draw(self: *Self) void {
-        const vzoom = @as(f32, @floatFromInt(rl.getScreenHeight())) / 16.0;
-        const hzoom = @as(f32, @floatFromInt(rl.getScreenWidth())) / 16.0;
+
+        const vzoom = @as(f32, @floatFromInt(rl.getScreenHeight())) / FIELD_SIZE;
+        const hzoom = @as(f32, @floatFromInt(rl.getScreenWidth())) / FIELD_SIZE;
 
         self.camera_resolution = @min(vzoom, hzoom);
-        self.camera.zoom = self.camera_resolution * self.camera_zoom;
         self.camera.offset = rl.Vector2{
             .x = @as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0,
             .y = @as(f32, @floatFromInt(rl.getScreenHeight())) / 2.0,
         };
-        self.camera.target = self.camera_position;
-        self.camera.rotation = self.camera_rotation * std.math.deg_per_rad;
+        if (self.camera_snap) {
+            self.camera.zoom = self.camera_resolution * self.camera_zoom;
+            self.camera.target = self.camera_position;
+            self.camera.rotation = self.camera_rotation * std.math.deg_per_rad;
+        } else {
+            const LERP_FACTOR: f32 = comptime blk: {
+                break :blk 1.0 - 1.0 / 32.0;
+            };
+            self.camera.zoom = math.lerp(
+                self.camera.zoom,
+                self.camera_resolution * self.camera_zoom,
+                LERP_FACTOR,
+                delta,
+            );
+            self.camera.target.x = math.lerp(
+                self.camera.target.x,
+                self.camera_position.x,
+                LERP_FACTOR,
+                delta,
+            );
+            self.camera.target.y = math.lerp(
+                self.camera.target.y,
+                self.camera_position.y,
+                LERP_FACTOR,
+                delta,
+            );
+            // TODO: Use a special lerp for angles
+            self.camera.rotation = math.lerp(
+                self.camera.rotation,
+                self.camera_rotation * std.math.deg_per_rad,
+                LERP_FACTOR,
+                delta,
+            );
+        }
+    }
+    pub fn draw(self: *Self) void {
         {
             rl.beginMode2D(self.camera);
             defer rl.endMode2D();
 
             rl.drawRectangle(-8, -8, 16, 16, rl.Color.dark_gray);
             rl.drawRectangle(7, 7, 1, 1, rl.Color.red);
+
+            for (self.items.items) |item| {
+                switch (item.storage) {
+                    Item.Storage.card => |card| {
+                        if (card.parent != null) {
+                            continue;
+                        }
+                        rl.drawTexturePro(
+                            self.atlas,
+                            if (card.face_up) card.face_texture else card.back_texture,
+                            rl.Rectangle.init(
+                                item.position.x - item.size.x * 0.5,
+                                item.position.y - item.size.y * 0.5,
+                                item.size.x,
+                                item.size.y,
+                            ),
+                            rl.Vector2.zero(),
+                            item.rotation,
+                            rl.Color.white,
+                        );
+                    },
+                    Item.Storage.deck => |deck| {
+                        rl.drawTexturePro(
+                            self.atlas,
+                            deck.texture,
+                            rl.Rectangle.init(
+                                item.position.x - item.size.x,
+                                item.position.y - item.size.y,
+                                item.size.x * 2.0,
+                                item.size.y * 2.0,
+                            ),
+                            rl.Vector2.zero(),
+                            item.rotation,
+                            rl.Color.white,
+                        );
+                        var top_card: ?*const Card = null;
+                        if (deck.cards.items.len > 0) {
+                            top_card = &self.items.items[deck.cards.items[deck.cards.items.len - 1]].storage.card;
+                        }
+                        if (top_card) |card| {
+                            rl.drawTexturePro(
+                                self.atlas,
+                                card.back_texture,
+                                rl.Rectangle.init(
+                                    item.position.x - item.size.x * 0.5,
+                                    item.position.y - item.size.y * 0.5,
+                                    item.size.x,
+                                    item.size.y,
+                                ),
+                                rl.Vector2.zero(),
+                                item.rotation,
+                                rl.Color.white,
+                            );
+                        }
+                    },
+                    else => {},
+                }
+            }
         }
+    }
+    fn find_nearest_draggable(self: *const Self, position: rl.Vector2, radius: f32) ?usize {
+        if (self.items.items.len == 0) {
+            return null;
+        }
+        const r2 = radius * radius;
+        var best: ?struct { usize, f32 } = null;
+        for (self.items.items, 0..) |item, i| {
+            if (item.storage == Item.Storage.card and item.storage.card.parent != null) {
+                continue;
+            }
+            const d2 = item.position.distanceSqr(position);
+            if (d2 <= r2) {
+                if (best == null or best.?[1] > d2) {
+                    best = .{ i, d2 };
+                }
+            }
+        }
+        return if (best == null) null else best.?[0];
     }
 };
 
-const TableItem = struct {
+const Item = struct {
+    size: rl.Vector2,
     position: rl.Vector2,
     rotation: f32,
     storage: Storage,
 
     const Storage = union(enum) {
         card: Card,
-        deck: std.ArrayList(Card),
-        stack: std.ArrayList(Card),
+        deck: Deck,
+        stack: Stack,
     };
 };
 const Card = struct {
-    size: rl.Vector2,
+    parent: ?ItemID,
     face_up: bool,
-    face_texture: rl.Rectangle,
-    back_texture: rl.Rectangle,
+    face_texture: GameTexture,
+    back_texture: GameTexture,
+};
+const Deck = struct {
+    cards: std.ArrayList(ItemID),
+    texture: GameTexture,
+};
+const Stack = struct {
+    cards: std.ArrayList(ItemID),
+    direction: StackDirection,
+    texture: GameTexture,
+
+    const StackDirection = enum {
+        down_top,
+        down_bottom,
+        up_top,
+        up_bottom,
+    };
 };
