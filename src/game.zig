@@ -346,7 +346,51 @@ pub const GameState = struct {
                             );
                         }
                     },
-                    else => {},
+                    Item.Storage.stack => |stack| {
+                        rl.drawTexturePro(
+                            self.atlas,
+                            stack.texture,
+                            rl.Rectangle.init(
+                                item.position.x - item.size.x,
+                                item.position.y - item.size.y,
+                                item.size.x * 2.0,
+                                item.size.y * 2.0,
+                            ),
+                            rl.Vector2.zero(),
+                            item.rotation,
+                            rl.Color.white,
+                        );
+                        var offset = rl.Vector2.init(0.0, item.size.y * 0.25).rotate(item.rotation);
+                        var from: isize, const to: isize, const delta: isize = switch (stack.direction) {
+                            .down_top => .{ 0, @intCast(stack.cards.items.len), 1 },
+                            // .down_bottom => {},
+                            .up_top => .{ @intCast(stack.cards.items.len), -1, -1 },
+                            // .up_bottom => {},
+                            else => unreachable,
+                        };
+                        while (from != to) : (from += delta) {
+                            const drawn_item = &self.items.items[stack.cards.items[@intCast(from)]];
+                            if (drawn_item.storage != Item.Storage.card) {
+                                // Something's wrong...
+                                continue;
+                            }
+                            const drawn_card = &drawn_item.storage.card;
+                            const drawn_offset = offset.scale(@floatFromInt(from));
+                            rl.drawTexturePro(
+                                self.atlas,
+                                if (drawn_card.face_up) drawn_card.face_texture else drawn_card.back_texture,
+                                rl.Rectangle.init(
+                                    drawn_item.position.x - drawn_item.size.x * 0.5 + drawn_offset.x + item.position.x,
+                                    drawn_item.position.y - drawn_item.size.y * 0.5 + drawn_offset.y + item.position.y,
+                                    drawn_item.size.x,
+                                    drawn_item.size.y,
+                                ),
+                                rl.Vector2.zero(),
+                                drawn_item.rotation + item.rotation,
+                                rl.Color.white,
+                            );
+                        }
+                    },
                 }
             }
         }

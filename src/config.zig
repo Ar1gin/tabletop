@@ -11,7 +11,7 @@ pub const Uv = struct { f32, f32, f32, f32 };
 pub const Item = union(enum) { card: Card, deck: Deck, stack: Stack };
 pub const Card = struct { transform: Transform = .{}, shown: bool = false, front_uv: Uv, back_uv: Uv };
 pub const Deck = struct { transform: Transform = .{}, cards: []const Card, uv: Uv };
-pub const Stack = struct { transform: Transform = .{}, cards: []const Card = &.{}, uv: Uv, direction: StackDirection = StackDirection.up_bottom };
+pub const Stack = struct { transform: Transform = .{}, cards: []const Card = &.{}, uv: Uv, direction: StackDirection = StackDirection.down_top };
 pub const StackDirection = enum { down_top, down_bottom, up_top, up_bottom };
 
 atlas_path: [:0]const u8,
