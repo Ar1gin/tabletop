@@ -10,7 +10,7 @@ pub const ItemID = usize;
 const FIELD_SIZE: f32 = 16.0;
 const TOUCH_DELAY: f32 = 0.2;
 const DRAG_THRESHOLD: f32 = 64.0;
-const TOUCH_RADIUS: f32 = 0.5;
+const TOUCH_RADIUS: f32 = 1.5;
 const DOUBLE_DELAY: f32 = 0.2;
 
 pub const GameState = struct {
@@ -94,12 +94,16 @@ pub const GameState = struct {
     }
     pub fn update(self: *Self, delta: f32) void {
         const touch_points = rl.getTouchPointCount();
+        // TODO: Rework!!
         switch (touch_points) { // God damn it, someone's gotta unravel this spaghetti
             else => {
                 if (self.touch_state != TouchState.none) {
-                    self.touch_state = TouchState{ .none = 0.0 };
-
-                    self.dragging = null;
+                    if (self.dragging != null) {
+                        self.stop_drag(self.touch_state.single[1]);
+                        self.touch_state = TouchState{ .none = DRAG_THRESHOLD };
+                    } else {
+                        self.touch_state = TouchState{ .none = 0.0 };
+                    }
 
                     // Probaby has to be put in a separate function
                     self.camera_snap = false;
@@ -149,8 +153,8 @@ pub const GameState = struct {
                 if (self.touch_state != TouchState.single) {
                     self.camera_snap = true;
                     if (self.touch_state == TouchState.none and self.touch_state.none <= DOUBLE_DELAY) {
-                        // TODO: Tap-drag
                         self.touch_state = TouchState{ .single = .{ position, position, 0.0, true } };
+                        self.start_drag(position, true);
                     } else {
                         self.touch_state = TouchState{ .single = .{ position, position, 0.0, false } };
                     }
@@ -162,10 +166,7 @@ pub const GameState = struct {
                         if (self.touch_state.single[0].distanceSqr(self.touch_state.single[1]) >= DRAG_THRESHOLD) {
                             // Drag
                             self.touch_state.single[3] = true;
-                            self.dragging = self.find_nearest_draggable(
-                                rl.getScreenToWorld2D(self.touch_state.single[0], self.camera),
-                                TOUCH_RADIUS,
-                            );
+                            self.start_drag(self.touch_state.single[0], false);
                         } else if (self.touch_state.single[2] >= TOUCH_DELAY) {
                             // Hold
                         }
@@ -395,7 +396,73 @@ pub const GameState = struct {
             }
         }
     }
-    fn find_nearest_draggable(self: *const Self, position: rl.Vector2, radius: f32) ?usize {
+    fn start_drag(self: *Self, position: rl.Vector2, tap: bool) void {
+        const to_drag = self.find_nearest_draggable(
+            rl.getScreenToWorld2D(position, self.camera),
+            TOUCH_RADIUS,
+            null,
+        ) orelse return;
+        if (tap) {
+            switch (self.items.items[to_drag].storage) {
+                Item.Storage.card => |*card| {
+                    card.face_up = !card.face_up;
+                },
+                else => {},
+            }
+            self.dragging = to_drag;
+        } else {
+            switch (self.items.items[to_drag].storage) {
+                Item.Storage.card => {
+                    self.dragging = to_drag;
+                },
+                Item.Storage.deck => |*deck| {
+                    if (deck.cards.items.len > 0) {
+                        const new_drag = deck.cards.pop();
+                        self.items.items[new_drag].storage.card.parent = null;
+                        self.dragging = new_drag;
+                    }
+                },
+                Item.Storage.stack => |*stack| {
+                    if (stack.cards.items.len > 0) {
+                        const new_drag = stack.cards.pop();
+                        self.items.items[new_drag].storage.card.parent = null;
+                        self.dragging = new_drag;
+                    }
+                },
+            }
+        }
+    }
+    fn stop_drag(self: *Self, position: rl.Vector2) void {
+        const dragging = self.dragging orelse return;
+        defer self.dragging = null;
+
+        const dropped_item = &self.items.items[dragging];
+        if (dropped_item.storage != Item.Storage.card) {
+            return;
+        }
+
+        const drop = self.find_nearest_draggable(
+            rl.getScreenToWorld2D(position, self.camera),
+            TOUCH_RADIUS,
+            dragging,
+        ) orelse return;
+        switch (self.items.items[drop].storage) {
+            Item.Storage.deck => |*deck| {
+                dropped_item.storage.card.parent = drop;
+                dropped_item.position = rl.Vector2.zero();
+                dropped_item.rotation = 0.0;
+                deck.cards.append(dragging) catch unreachable;
+            },
+            Item.Storage.stack => |*stack| {
+                dropped_item.storage.card.parent = drop;
+                dropped_item.position = rl.Vector2.zero();
+                dropped_item.rotation = 0.0;
+                stack.cards.append(dragging) catch unreachable;
+            },
+            else => {},
+        }
+    }
+    fn find_nearest_draggable(self: *const Self, position: rl.Vector2, radius: f32, excluding: ?usize) ?usize {
         if (self.items.items.len == 0) {
             return null;
         }
@@ -403,6 +470,9 @@ pub const GameState = struct {
         var best: ?struct { usize, f32 } = null;
         for (self.items.items, 0..) |item, i| {
             if (item.storage == Item.Storage.card and item.storage.card.parent != null) {
+                continue;
+            }
+            if (i == excluding) {
                 continue;
             }
             const d2 = item.position.distanceSqr(position);
