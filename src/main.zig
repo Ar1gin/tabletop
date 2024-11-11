@@ -10,7 +10,7 @@ pub fn main() !void {
     defer rl.closeWindow();
     rl.setWindowState(.{
         .vsync_hint = true,
-		// TODO: Enable msaa??
+        // TODO: Enable msaa??
         .msaa_4x_hint = true,
         .window_resizable = true,
     });
@@ -19,7 +19,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     const alloc = gpa.allocator();
-    var game_state = GameState.init(alloc);
+    var game_state = try GameState.init(alloc, "assets/debug_config.json");
     defer game_state.deinit();
 
     rl.setTargetFPS(60);

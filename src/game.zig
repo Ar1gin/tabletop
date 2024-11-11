@@ -2,9 +2,10 @@ const std = @import("std");
 const rl = @import("raylib");
 const rg = @import("raygui");
 const math = @import("math.zig");
+const Config = @import("config.zig");
 
-const GameTexture = rl.Rectangle;
-const ItemID = usize;
+pub const GameTexture = rl.Rectangle;
+pub const ItemID = usize;
 
 const FIELD_SIZE: f32 = 16.0;
 const TOUCH_DELAY: f32 = 0.2;
@@ -21,6 +22,7 @@ pub const GameState = struct {
     camera_rotation: f32,
     camera_snap: bool,
     atlas: rl.Texture,
+    table_texture: GameTexture,
     items: std.ArrayList(Item), // TODO: Make this into a hashmap
     dragging: ?usize,
     hand: std.ArrayList(Card),
@@ -45,7 +47,10 @@ pub const GameState = struct {
     };
 
     const Self = @This();
-    pub fn init(alloc: std.mem.Allocator) Self {
+    pub fn init(alloc: std.mem.Allocator, config_path: []const u8) !Self {
+        const config = try Config.parse(alloc, config_path);
+        defer config.deinit();
+
         return .{
             .alloc = alloc,
             .camera = rl.Camera2D{
@@ -60,41 +65,13 @@ pub const GameState = struct {
             .camera_rotation = 0.0,
             .camera_snap = true,
             .atlas = blk: {
-                var texture = rl.loadTexture("assets/debug.png");
+                var texture = rl.loadTexture(config.value.atlas_path);
                 rl.genTextureMipmaps(&texture);
                 break :blk texture;
             },
+            .table_texture = Config.rect_from_uv(config.value.table_uv),
             .dragging = null,
-            .items = blk: {
-                var items = std.ArrayList(Item).init(alloc);
-                for (0..3) |i| {
-                    items.append(Item{
-                        .size = rl.Vector2.init(1.0, 1.0),
-                        .position = rl.Vector2.zero(),
-                        .rotation = 0.0,
-                        .storage = Item.Storage{ .card = Card{
-                            .parent = 3,
-                            .face_up = true,
-                            .face_texture = GameTexture.init(@as(f32, @floatFromInt(i + 1)) * 16.0 + 128.0, 0.0, 16.0, 16.0),
-                            .back_texture = GameTexture.init(128.0, 0.0, 16.0, 16.0),
-                        } },
-                    }) catch unreachable;
-                }
-                items.append(Item{
-                    .size = rl.Vector2.init(1.0, 1.0),
-                    .position = rl.Vector2.zero(),
-                    .rotation = 0.0,
-                    .storage = Item.Storage{ .deck = Deck{
-                        .cards = blk2: {
-                            var cards = std.ArrayList(ItemID).init(alloc);
-                            cards.appendSlice(&.{ 0, 1, 2 }) catch unreachable;
-                            break :blk2 cards;
-                        },
-                        .texture = GameTexture.init(128.0, 64.0, 32.0, 32.0),
-                    } },
-                }) catch unreachable;
-                break :blk items;
-            },
+            .items = config.value.gen_items(alloc),
             .hand = std.ArrayList(Card).init(alloc),
             .touch_state = TouchState{ .none = 0.0 },
         };
@@ -306,7 +283,14 @@ pub const GameState = struct {
             defer rl.endMode2D();
 
             rl.drawRectangle(-8, -8, 16, 16, rl.Color.dark_gray);
-            rl.drawRectangle(7, 7, 1, 1, rl.Color.red);
+            rl.drawTexturePro(
+                self.atlas,
+                self.table_texture,
+                rl.Rectangle.init(-8.0, -8.0, 16.0, 16.0),
+                rl.Vector2.zero(),
+                0.0,
+                rl.Color.white,
+            );
 
             for (self.items.items) |item| {
                 switch (item.storage) {
@@ -388,34 +372,34 @@ pub const GameState = struct {
     }
 };
 
-const Item = struct {
+pub const Item = struct {
     size: rl.Vector2,
     position: rl.Vector2,
     rotation: f32,
     storage: Storage,
 
-    const Storage = union(enum) {
+    pub const Storage = union(enum) {
         card: Card,
         deck: Deck,
         stack: Stack,
     };
 };
-const Card = struct {
+pub const Card = struct {
     parent: ?ItemID,
     face_up: bool,
     face_texture: GameTexture,
     back_texture: GameTexture,
 };
-const Deck = struct {
+pub const Deck = struct {
     cards: std.ArrayList(ItemID),
     texture: GameTexture,
 };
-const Stack = struct {
+pub const Stack = struct {
     cards: std.ArrayList(ItemID),
     direction: StackDirection,
     texture: GameTexture,
 
-    const StackDirection = enum {
+    pub const StackDirection = enum {
         down_top,
         down_bottom,
         up_top,
