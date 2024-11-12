@@ -11,6 +11,7 @@ const FIELD_SIZE: f32 = 16.0;
 const TOUCH_DELAY: f32 = 0.2;
 const DRAG_THRESHOLD: f32 = 64.0;
 const TOUCH_RADIUS: f32 = 1.5;
+const DROP_RADIUS: f32 = 0.5;
 const DOUBLE_DELAY: f32 = 0.2;
 
 pub const GameState = struct {
@@ -98,6 +99,7 @@ pub const GameState = struct {
         switch (touch_points) { // God damn it, someone's gotta unravel this spaghetti
             else => {
                 if (self.touch_state != TouchState.none) {
+                    // BUG: Dragging is not set to null after two-finger pinch
                     if (self.dragging != null) {
                         self.stop_drag(self.touch_state.single[1]);
                         self.touch_state = TouchState{ .none = DRAG_THRESHOLD };
@@ -283,7 +285,6 @@ pub const GameState = struct {
             rl.beginMode2D(self.camera);
             defer rl.endMode2D();
 
-            rl.drawRectangle(-8, -8, 16, 16, rl.Color.dark_gray);
             rl.drawTexturePro(
                 self.atlas,
                 self.table_texture,
@@ -301,14 +302,14 @@ pub const GameState = struct {
                         }
                         rl.drawTexturePro(
                             self.atlas,
-                            if (card.face_up) card.face_texture else card.back_texture,
+                            card.texture(),
                             rl.Rectangle.init(
-                                item.position.x - item.size.x * 0.5,
-                                item.position.y - item.size.y * 0.5,
+                                item.position.x,
+                                item.position.y,
                                 item.size.x,
                                 item.size.y,
                             ),
-                            rl.Vector2.zero(),
+                            item.size.scale(0.5),
                             item.rotation,
                             rl.Color.white,
                         );
@@ -318,31 +319,28 @@ pub const GameState = struct {
                             self.atlas,
                             deck.texture,
                             rl.Rectangle.init(
-                                item.position.x - item.size.x,
-                                item.position.y - item.size.y,
-                                item.size.x * 2.0,
-                                item.size.y * 2.0,
+                                item.position.x,
+                                item.position.y,
+                                item.size.x,
+                                item.size.y,
                             ),
-                            rl.Vector2.zero(),
+                            item.size.scale(0.5),
                             item.rotation,
                             rl.Color.white,
                         );
-                        var top_card: ?*const Card = null;
                         if (deck.cards.items.len > 0) {
-                            top_card = &self.items.items[deck.cards.items[deck.cards.items.len - 1]].storage.card;
-                        }
-                        if (top_card) |card| {
+                            const top_item = &self.items.items[deck.cards.items[deck.cards.items.len - 1]];
                             rl.drawTexturePro(
                                 self.atlas,
-                                card.back_texture,
+                                top_item.storage.card.texture(),
                                 rl.Rectangle.init(
-                                    item.position.x - item.size.x * 0.5,
-                                    item.position.y - item.size.y * 0.5,
-                                    item.size.x,
-                                    item.size.y,
+                                    top_item.position.x + item.position.x,
+                                    top_item.position.y + item.position.y,
+                                    top_item.size.x,
+                                    top_item.size.y,
                                 ),
-                                rl.Vector2.zero(),
-                                item.rotation,
+                                top_item.size.scale(0.5),
+                                top_item.rotation + item.rotation,
                                 rl.Color.white,
                             );
                         }
@@ -352,16 +350,16 @@ pub const GameState = struct {
                             self.atlas,
                             stack.texture,
                             rl.Rectangle.init(
-                                item.position.x - item.size.x,
-                                item.position.y - item.size.y,
-                                item.size.x * 2.0,
-                                item.size.y * 2.0,
+                                item.position.x,
+                                item.position.y,
+                                item.size.x,
+                                item.size.y,
                             ),
-                            rl.Vector2.zero(),
+                            item.size.scale(0.5),
                             item.rotation,
                             rl.Color.white,
                         );
-                        var offset = rl.Vector2.init(0.0, item.size.y * 0.25).rotate(item.rotation);
+                        var offset = rl.Vector2.init(0.0, item.size.y * 0.5).rotate(item.rotation * std.math.rad_per_deg);
                         var from: isize, const to: isize, const delta: isize = switch (stack.direction) {
                             .down_top => .{ 0, @intCast(stack.cards.items.len), 1 },
                             // .down_bottom => {},
@@ -379,14 +377,14 @@ pub const GameState = struct {
                             const drawn_offset = offset.scale(@floatFromInt(from));
                             rl.drawTexturePro(
                                 self.atlas,
-                                if (drawn_card.face_up) drawn_card.face_texture else drawn_card.back_texture,
+                                drawn_card.texture(),
                                 rl.Rectangle.init(
-                                    drawn_item.position.x - drawn_item.size.x * 0.5 + drawn_offset.x + item.position.x,
-                                    drawn_item.position.y - drawn_item.size.y * 0.5 + drawn_offset.y + item.position.y,
+                                    drawn_item.position.x + drawn_offset.x + item.position.x,
+                                    drawn_item.position.y + drawn_offset.y + item.position.y,
                                     drawn_item.size.x,
                                     drawn_item.size.y,
                                 ),
-                                rl.Vector2.zero(),
+                                drawn_item.size.scale(0.5),
                                 drawn_item.rotation + item.rotation,
                                 rl.Color.white,
                             );
@@ -443,7 +441,7 @@ pub const GameState = struct {
 
         const drop = self.find_nearest_draggable(
             rl.getScreenToWorld2D(position, self.camera),
-            TOUCH_RADIUS,
+            DROP_RADIUS,
             dragging,
         ) orelse return;
         switch (self.items.items[drop].storage) {
@@ -503,6 +501,14 @@ pub const Card = struct {
     face_up: bool,
     face_texture: GameTexture,
     back_texture: GameTexture,
+
+    pub fn texture(self: *const @This()) GameTexture {
+        if (self.face_up) {
+            return self.face_texture;
+        } else {
+            return self.back_texture;
+        }
+    }
 };
 pub const Deck = struct {
     cards: std.ArrayList(ItemID),
