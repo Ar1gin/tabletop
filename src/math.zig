@@ -26,3 +26,41 @@ pub fn comp_to_vec(complex: Complex) rl.Vector2 {
         .y = complex.im,
     };
 }
+
+pub fn calc_pinch(
+    s1: rl.Vector2,
+    s2: rl.Vector2,
+    p1: rl.Vector2,
+    p2: rl.Vector2,
+    z1: f32,
+    r1: f32,
+    t1: rl.Vector2,
+    o: rl.Vector2,
+) struct { z: f32, r: f32, t: rl.Vector2 } {
+    const z1r1 = Complex.init(
+        z1 * std.math.cos(r1),
+        z1 * std.math.sin(r1),
+    );
+    const z2r2 = z1r1.mul(Complex.init(
+        p1.x - p2.x,
+        p1.y - p2.y,
+    )).mul(Complex.init(
+        s1.x - s2.x,
+        s1.y - s2.y,
+    ).reciprocal());
+
+    const z2 = z2r2.magnitude();
+    const r2 = std.math.atan2(z2r2.im, z2r2.re);
+
+    const t2 = Complex.init(
+        s1.x - o.x,
+        s1.y - o.y,
+    ).mul(z1r1.reciprocal()).add(Complex.init(
+        p1.x - o.x,
+        p1.y - o.y,
+    ).mul(z2r2.reciprocal()).neg()).add(Complex.init(
+        t1.x,
+        t1.y,
+    ));
+    return .{ .z = z2, .r = r2, .t = rl.Vector2.init(t2.re, t2.im) };
+}

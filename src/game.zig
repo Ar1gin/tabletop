@@ -8,11 +8,13 @@ pub const GameTexture = rl.Rectangle;
 pub const ItemID = usize;
 
 const FIELD_SIZE: f32 = 16.0;
-const TOUCH_DELAY: f32 = 0.2;
-const DRAG_THRESHOLD: f32 = 64.0;
+
+const DRAG_INIT_RADIUS: f32 = 64.0;
 const TOUCH_RADIUS: f32 = 1.5;
 const DROP_RADIUS: f32 = 0.5;
-const DOUBLE_DELAY: f32 = 0.2;
+
+const HOLD_THRESHOLD = 0.5;
+const DOUBLE_THRESHOLD: f32 = 0.2;
 
 pub const GameState = struct {
     alloc: std.mem.Allocator,
@@ -25,25 +27,25 @@ pub const GameState = struct {
     atlas: rl.Texture,
     table_texture: GameTexture,
     items: std.ArrayList(Item), // TODO: Make this into a hashmap
-    dragging: ?usize,
+    dragging: ?usize, // This better be merged into `TouchState`
     hand: std.ArrayList(Card),
     touch_state: TouchState,
 
     const TouchState = union(enum) {
-        none: f32,
-        single: struct {
-            rl.Vector2,
-            rl.Vector2,
-            f32,
-            bool,
+        none: f32, // Time since last press
+        pressed: struct {
+            rl.Vector2, // Initial position
+            f32, // Hold time
+            bool, // Double
         },
-        double: struct {
-            rl.Vector2,
-            rl.Vector2,
-            f32,
-            f32,
-            f32,
-            rl.Vector2,
+        drag,
+        panning: struct {
+            rl.Vector2, // Initial tap 1
+            rl.Vector2, // Initial tap 2
+            f32, // Resolution
+            f32, // Zoom
+            f32, // Rotation
+            rl.Vector2, // Target
         },
     };
 
@@ -95,144 +97,131 @@ pub const GameState = struct {
     }
     pub fn update(self: *Self, delta: f32) void {
         const touch_points = rl.getTouchPointCount();
-        // TODO: Rework!!
-        switch (touch_points) { // God damn it, someone's gotta unravel this spaghetti
-            else => {
-                if (self.touch_state != TouchState.none) {
-                    // BUG: Dragging is not set to null after two-finger pinch
-                    if (self.dragging != null) {
-                        self.stop_drag(self.touch_state.single[1]);
-                        self.touch_state = TouchState{ .none = DRAG_THRESHOLD };
-                    } else {
-                        self.touch_state = TouchState{ .none = 0.0 };
-                    }
+        switch (self.touch_state) {
+            TouchState.none => |*time| {
+                switch (touch_points) {
+                    0 => time.* += delta,
+                    1 => self.touch_state = TouchState{ .pressed = .{ rl.getTouchPosition(0), 0.0, time.* < DOUBLE_THRESHOLD } },
+                    2 => self.touch_state = TouchState{ .panning = .{
+                        rl.getTouchPosition(0),
+                        rl.getTouchPosition(1),
+                        self.camera_resolution,
+                        self.camera_zoom,
+                        self.camera_rotation,
+                        self.camera_position,
+                    } },
+                    else => {},
+                }
+            },
+            TouchState.pressed => |*pressed| {
+                switch (touch_points) {
+                    0 => self.touch_state = TouchState{ .none = 0.0 },
+                    1 => {
+                        pressed[1] += delta;
+                        if (pressed[2] or pressed[0].distanceSqr(rl.getTouchPosition(0)) >= DRAG_INIT_RADIUS) {
+                            self.start_drag(rl.getTouchPosition(0), pressed[2]);
+                            self.touch_state = TouchState.drag;
+                        } else if (pressed[1] >= HOLD_THRESHOLD) {
+                            // TODO: Hold
+                        }
+                    },
+                    2 => {
+                        if (pressed[1] < HOLD_THRESHOLD) {
+                            self.touch_state = TouchState{ .panning = .{
+                                rl.getTouchPosition(0),
+                                rl.getTouchPosition(1),
+                                self.camera_resolution,
+                                self.camera_zoom,
+                                self.camera_rotation,
+                                self.camera_position,
+                            } };
+                        } else {
+                            self.start_drag(rl.getTouchPosition(0), false);
+                            self.touch_state = TouchState.drag;
+                        }
+                    },
+                    else => {},
+                }
+            },
+            TouchState.drag => {
+                switch (touch_points) {
+                    0 => {
+                        self.stop_drag();
+                        self.touch_state = TouchState{ .none = DOUBLE_THRESHOLD };
+                    },
+                    1 => {
+                        if (self.dragging) |dragging| {
+                            self.items.items[dragging].position = rl.getScreenToWorld2D(
+                                rl.getTouchPosition(0),
+                                self.camera,
+                            );
+                        }
+                    },
+                    2 => {}, // TODO: Drag and rotate
+                    else => {},
+                }
+            },
+            TouchState.panning => |*panning| {
+                switch (touch_points) {
+                    0 => {
+                        self.touch_state = TouchState{ .none = DOUBLE_THRESHOLD };
 
-                    // Probaby has to be put in a separate function
-                    self.camera_snap = false;
-                    if (self.camera_zoom >= 16.0) {
-                        self.camera_zoom = 16.0;
-                    }
-                    if (self.camera_zoom < 0.5) {
-                        self.camera_zoom = 0.5;
-                    }
-                    if (self.camera_position.x > FIELD_SIZE) {
-                        self.camera_position.x = FIELD_SIZE;
-                    }
-                    if (self.camera_position.y > FIELD_SIZE) {
-                        self.camera_position.y = FIELD_SIZE;
-                    }
-                    if (self.camera_position.x < -FIELD_SIZE) {
-                        self.camera_position.x = -FIELD_SIZE;
-                    }
-                    if (self.camera_position.y < -FIELD_SIZE) {
-                        self.camera_position.y = -FIELD_SIZE;
-                    }
-                    // NOTE: Snap angles to 45 degress for now.
-                    const angles: [8]f32 = .{
-                        0.0,
-                        std.math.pi * 0.25,
-                        std.math.pi * 0.5,
-                        std.math.pi * 0.75,
-                        std.math.pi,
-                        std.math.pi * 1.25,
-                        std.math.pi * 1.5,
-                        std.math.pi * 1.75,
-                    };
-                    var best_angle: usize = 0;
-                    for (1..angles.len) |i| {
-                        // TODO: Compare angles properly
-                        if (@abs(self.camera_rotation - angles[i]) < @abs(self.camera_rotation - angles[best_angle])) {
-                            best_angle = i;
+                        self.camera_snap = false;
+                        if (self.camera_zoom >= 16.0) {
+                            self.camera_zoom = 16.0;
                         }
-                    }
-                    self.camera_rotation = angles[best_angle];
-                } else {
-                    self.touch_state.none += delta;
-                }
-            },
-            1 => {
-                const position = rl.getTouchPosition(0);
-                if (self.touch_state != TouchState.single) {
-                    self.camera_snap = true;
-                    if (self.touch_state == TouchState.none and self.touch_state.none <= DOUBLE_DELAY) {
-                        self.touch_state = TouchState{ .single = .{ position, position, 0.0, true } };
-                        self.start_drag(position, true);
-                    } else {
-                        self.touch_state = TouchState{ .single = .{ position, position, 0.0, false } };
-                    }
-                } else {
-                    self.touch_state.single[1] = position;
-                    const less = self.touch_state.single[2] < TOUCH_DELAY;
-                    self.touch_state.single[2] += delta;
-                    if (less and !self.touch_state.single[3]) {
-                        if (self.touch_state.single[0].distanceSqr(self.touch_state.single[1]) >= DRAG_THRESHOLD) {
-                            // Drag
-                            self.touch_state.single[3] = true;
-                            self.start_drag(self.touch_state.single[0], false);
-                        } else if (self.touch_state.single[2] >= TOUCH_DELAY) {
-                            // Hold
+                        if (self.camera_zoom < 0.5) {
+                            self.camera_zoom = 0.5;
                         }
-                    }
-                    if (self.dragging) |dragging| {
-                        self.items.items[dragging].position = rl.getScreenToWorld2D(position, self.camera);
-                    }
-                }
-            },
-            2 => {
-                const position1 = rl.getTouchPosition(0);
-                const position2 = rl.getTouchPosition(1);
-                if (self.touch_state != TouchState.double) {
-                    // That's IMPOSSIBLE, duh
-                    if (position1.equals(position2) == 0) {
+                        if (self.camera_position.x > FIELD_SIZE) {
+                            self.camera_position.x = FIELD_SIZE;
+                        }
+                        if (self.camera_position.y > FIELD_SIZE) {
+                            self.camera_position.y = FIELD_SIZE;
+                        }
+                        if (self.camera_position.x < -FIELD_SIZE) {
+                            self.camera_position.x = -FIELD_SIZE;
+                        }
+                        if (self.camera_position.y < -FIELD_SIZE) {
+                            self.camera_position.y = -FIELD_SIZE;
+                        }
+                        // NOTE: Snap angles to 45 degress for now.
+                        const angles: [8]f32 = .{
+                            0.0,
+                            std.math.pi * 0.25,
+                            std.math.pi * 0.5,
+                            std.math.pi * 0.75,
+                            std.math.pi,
+                            std.math.pi * 1.25,
+                            std.math.pi * 1.5,
+                            std.math.pi * 1.75,
+                        };
+                        var best_angle: usize = 0;
+                        for (1..angles.len) |i| {
+                            // TODO: Compare angles properly
+                            if (@abs(self.camera_rotation - angles[i]) < @abs(self.camera_rotation - angles[best_angle])) {
+                                best_angle = i;
+                            }
+                        }
+                        self.camera_rotation = angles[best_angle];
+                    },
+                    2 => {
                         self.camera_snap = true;
-                        self.touch_state = TouchState{ .double = .{
-                            position1,
-                            position2,
-                            self.camera_resolution,
-                            self.camera_zoom,
-                            self.camera_rotation,
-                            self.camera_position,
-                        } };
-                    }
-                } else {
-                    const start1 = self.touch_state.double[0];
-                    const start2 = self.touch_state.double[1];
-                    const resolution = self.touch_state.double[2];
-                    const zoom1 = self.touch_state.double[3] * resolution;
-                    const rotation1 = self.touch_state.double[4];
-                    const target1 = self.touch_state.double[5];
-
-                    const Complex = std.math.Complex(f32);
-
-                    const z1r1 = Complex.init(
-                        zoom1 * std.math.cos(rotation1),
-                        zoom1 * std.math.sin(rotation1),
-                    );
-                    const z2r2 = z1r1.mul(Complex.init(
-                        position1.x - position2.x,
-                        position1.y - position2.y,
-                    )).mul(Complex.init(
-                        start1.x - start2.x,
-                        start1.y - start2.y,
-                    ).reciprocal());
-
-                    const zoom2 = z2r2.magnitude();
-                    const rotation2 = std.math.atan2(z2r2.im, z2r2.re);
-                    const target2 = Complex.init(
-                        start1.x - self.camera.offset.x,
-                        start1.y - self.camera.offset.y,
-                    ).mul(z1r1.reciprocal()).add(Complex.init(
-                        position1.x - self.camera.offset.x,
-                        position1.y - self.camera.offset.y,
-                    ).mul(z2r2.reciprocal()).neg()).add(Complex.init(
-                        target1.x,
-                        target1.y,
-                    ));
-
-                    self.camera_zoom = zoom2 / resolution;
-                    self.camera_rotation = rotation2;
-                    self.camera_position.x = target2.re;
-                    self.camera_position.y = target2.im;
+                        const pinch = math.calc_pinch(
+                            panning[0],
+                            panning[1],
+                            rl.getTouchPosition(0),
+                            rl.getTouchPosition(1),
+                            panning[2] * panning[3],
+                            panning[4],
+                            panning[5],
+                            self.camera.offset,
+                        );
+                        self.camera_zoom = pinch.z / panning[2];
+                        self.camera_rotation = pinch.r;
+                        self.camera_position = pinch.t;
+                    },
+                    else => {},
                 }
             },
         }
@@ -430,7 +419,7 @@ pub const GameState = struct {
             }
         }
     }
-    fn stop_drag(self: *Self, position: rl.Vector2) void {
+    fn stop_drag(self: *Self) void {
         const dragging = self.dragging orelse return;
         defer self.dragging = null;
 
@@ -440,7 +429,7 @@ pub const GameState = struct {
         }
 
         const drop = self.find_nearest_draggable(
-            rl.getScreenToWorld2D(position, self.camera),
+            dropped_item.position,
             DROP_RADIUS,
             dragging,
         ) orelse return;
