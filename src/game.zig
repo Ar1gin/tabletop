@@ -186,24 +186,7 @@ pub const GameState = struct {
                             self.camera_position.y = -FIELD_SIZE;
                         }
                         // NOTE: Snap angles to 45 degress for now.
-                        const angles: [8]f32 = .{
-                            0.0,
-                            std.math.pi * 0.25,
-                            std.math.pi * 0.5,
-                            std.math.pi * 0.75,
-                            std.math.pi,
-                            std.math.pi * 1.25,
-                            std.math.pi * 1.5,
-                            std.math.pi * 1.75,
-                        };
-                        var best_angle: usize = 0;
-                        for (1..angles.len) |i| {
-                            // TODO: Compare angles properly
-                            if (@abs(self.camera_rotation - angles[i]) < @abs(self.camera_rotation - angles[best_angle])) {
-                                best_angle = i;
-                            }
-                        }
-                        self.camera_rotation = angles[best_angle];
+                        self.camera_rotation = math.snap_angle(self.camera_rotation);
                     },
                     2 => {
                         self.camera_snap = true;
@@ -260,11 +243,11 @@ pub const GameState = struct {
                 LERP_FACTOR,
                 delta,
             );
-            // TODO: Use a special lerp for angles
-            self.camera.rotation = math.lerp(
+            self.camera.rotation = math.lerp_angle(
                 self.camera.rotation,
                 self.camera_rotation * std.math.deg_per_rad,
                 LERP_FACTOR,
+                360.0,
                 delta,
             );
         }

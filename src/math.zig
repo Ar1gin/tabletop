@@ -12,6 +12,16 @@ pub fn lerp(from: f32, to: f32, comptime speed: f32, delta: f32) f32 {
     const factor_to = 1.0 - factor_from;
     return factor_from * from + factor_to * to;
 }
+pub fn lerp_angle(from: f32, to: f32, comptime speed: f32, comptime tau: f32, delta: f32) f32 {
+    var target = to;
+    if (@abs(from - target) > @abs(from - (target - tau))) {
+        target -= tau;
+    }
+    if (@abs(from - target) > @abs(from - (target + tau))) {
+        target += tau;
+    }
+    return lerp(from, target, speed, delta);
+}
 
 pub fn complex_rotation(rotation: f32) Complex {
     return Complex.init(
@@ -25,6 +35,13 @@ pub fn comp_to_vec(complex: Complex) rl.Vector2 {
         .x = complex.re,
         .y = complex.im,
     };
+}
+
+pub fn snap_angle(angle: f32) f32 {
+    const SNAP_F2: f32 = (std.math.pi * 0.25);
+    const SNAP_F1: f32 = 1.0 / SNAP_F2;
+
+    return SNAP_F2 * std.math.round(angle * SNAP_F1);
 }
 
 pub fn calc_pinch(
