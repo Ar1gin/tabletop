@@ -37,8 +37,10 @@ pub fn comp_to_vec(complex: Complex) rl.Vector2 {
     };
 }
 
-pub fn snap_angle(angle: f32) f32 {
-    const SNAP_F2: f32 = (std.math.pi * 0.25);
+pub fn snap_angle(angle: f32, comptime tau: f32) f32 {
+    const SNAP_F2: f32 = comptime blk: {
+        break :blk tau * 0.125;
+    };
     const SNAP_F1: f32 = 1.0 / SNAP_F2;
 
     return SNAP_F2 * std.math.round(angle * SNAP_F1);
@@ -80,4 +82,23 @@ pub fn calc_pinch(
         t1.y,
     ));
     return .{ .z = z2, .r = r2, .t = rl.Vector2.init(t2.re, t2.im) };
+}
+
+pub fn touch_rotate(rotation: f32, start: rl.Vector2, end: rl.Vector2, comptime tau: f32, comptime factor: f32) f32 {
+    const mult = comptime blk: {
+        break :blk tau / std.math.tau * factor;
+    };
+    const normalized = Complex.div(
+        Complex.init(end.x, end.y),
+        Complex.init(start.x, start.y),
+    );
+    const rotation_delta = std.math.atan2(normalized.im, normalized.re) * mult;
+    const rotation_total = rotation + rotation_delta;
+    if (rotation_total < 0.0) {
+        return rotation_total + tau;
+    }
+    if (rotation_total >= tau) {
+        return rotation_total - tau;
+    }
+    return rotation_total;
 }

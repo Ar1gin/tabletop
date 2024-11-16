@@ -39,6 +39,10 @@ pub const GameState = struct {
             bool, // Double
         },
         drag,
+        drag_rotate: struct {
+            f32, // Initial drag delta
+            rl.Vector2, // Initial delta
+        },
         panning: struct {
             rl.Vector2, // Initial tap 1
             rl.Vector2, // Initial tap 2
@@ -97,6 +101,7 @@ pub const GameState = struct {
     }
     pub fn update(self: *Self, delta: f32) void {
         const touch_points = rl.getTouchPointCount();
+		// TODO: use `continue :blk` to rerun touch update on state change
         switch (self.touch_state) {
             TouchState.none => |*time| {
                 switch (touch_points) {
@@ -157,7 +162,55 @@ pub const GameState = struct {
                             );
                         }
                     },
-                    2 => {}, // TODO: Drag and rotate
+                    2 => {
+                        if (self.dragging) |dragging| {
+                            self.touch_state = TouchState{
+                                .drag_rotate = .{
+                                    self.items.items[dragging].rotation,
+                                    rl.getTouchPosition(1).subtract(rl.getTouchPosition(0)),
+                                },
+                            };
+                        }
+                    },
+                    else => {},
+                }
+            },
+            TouchState.drag_rotate => |drag_rotate| {
+                switch (touch_points) {
+                    0 => {
+                        if (self.dragging) |dragging| {
+                            self.items.items[dragging].rotation = math.snap_angle(
+                                self.items.items[dragging].rotation,
+                                360.0,
+                            );
+                        }
+                        self.stop_drag();
+                        self.touch_state = TouchState{ .none = DOUBLE_THRESHOLD };
+                    },
+                    1 => {
+                        if (self.dragging) |dragging| {
+                            self.items.items[dragging].rotation = math.snap_angle(
+                                self.items.items[dragging].rotation,
+                                360.0,
+                            );
+                        }
+                        self.touch_state = TouchState.drag;
+                    },
+                    2 => {
+                        if (self.dragging) |dragging| {
+                            self.items.items[dragging].position = rl.getScreenToWorld2D(
+                                rl.getTouchPosition(0),
+                                self.camera,
+                            );
+                            self.items.items[dragging].rotation = math.touch_rotate(
+                                drag_rotate[0],
+                                drag_rotate[1],
+                                rl.getTouchPosition(1).subtract(rl.getTouchPosition(0)),
+                                360.0,
+                                2.0,
+                            );
+                        }
+                    },
                     else => {},
                 }
             },
@@ -186,7 +239,7 @@ pub const GameState = struct {
                             self.camera_position.y = -FIELD_SIZE;
                         }
                         // NOTE: Snap angles to 45 degress for now.
-                        self.camera_rotation = math.snap_angle(self.camera_rotation);
+                        self.camera_rotation = math.snap_angle(self.camera_rotation, std.math.tau);
                     },
                     2 => {
                         self.camera_snap = true;
