@@ -2,6 +2,8 @@ const std = @import("std");
 const rl = @import("raylib");
 const rg = @import("raygui");
 const math = @import("math.zig");
+pub const Item = @import("item.zig");
+
 const Config = @import("config.zig");
 
 pub const GameTexture = rl.Rectangle;
@@ -28,7 +30,7 @@ pub const GameState = struct {
     table_texture: GameTexture,
     items: std.ArrayList(Item), // TODO: Make this into a hashmap
     dragging: ?usize, // This better be merged into `TouchState`
-    hand: std.ArrayList(Card),
+    hand: std.ArrayList(Item.Card),
     touch_state: TouchState,
 
     const TouchState = union(enum) {
@@ -79,7 +81,7 @@ pub const GameState = struct {
             .table_texture = Config.rect_from_uv(config.value.table_uv),
             .dragging = null,
             .items = config.value.gen_items(alloc),
-            .hand = std.ArrayList(Card).init(alloc),
+            .hand = std.ArrayList(Item.Card).init(alloc),
             .touch_state = TouchState{ .none = 0.0 },
         };
     }
@@ -101,7 +103,7 @@ pub const GameState = struct {
     }
     pub fn update(self: *Self, delta: f32) void {
         const touch_points = rl.getTouchPointCount();
-		// TODO: use `continue :blk` to rerun touch update on state change
+        // TODO: use `continue :blk` to rerun touch update on state change
         switch (self.touch_state) {
             TouchState.none => |*time| {
                 switch (touch_points) {
@@ -319,103 +321,8 @@ pub const GameState = struct {
                 rl.Color.white,
             );
 
-            for (self.items.items) |item| {
-                switch (item.storage) {
-                    Item.Storage.card => |card| {
-                        if (card.parent != null) {
-                            continue;
-                        }
-                        rl.drawTexturePro(
-                            self.atlas,
-                            card.texture(),
-                            rl.Rectangle.init(
-                                item.position.x,
-                                item.position.y,
-                                item.size.x,
-                                item.size.y,
-                            ),
-                            item.size.scale(0.5),
-                            item.rotation,
-                            rl.Color.white,
-                        );
-                    },
-                    Item.Storage.deck => |deck| {
-                        rl.drawTexturePro(
-                            self.atlas,
-                            deck.texture,
-                            rl.Rectangle.init(
-                                item.position.x,
-                                item.position.y,
-                                item.size.x,
-                                item.size.y,
-                            ),
-                            item.size.scale(0.5),
-                            item.rotation,
-                            rl.Color.white,
-                        );
-                        if (deck.cards.items.len > 0) {
-                            const top_item = &self.items.items[deck.cards.items[deck.cards.items.len - 1]];
-                            rl.drawTexturePro(
-                                self.atlas,
-                                top_item.storage.card.texture(),
-                                rl.Rectangle.init(
-                                    top_item.position.x + item.position.x,
-                                    top_item.position.y + item.position.y,
-                                    top_item.size.x,
-                                    top_item.size.y,
-                                ),
-                                top_item.size.scale(0.5),
-                                top_item.rotation + item.rotation,
-                                rl.Color.white,
-                            );
-                        }
-                    },
-                    Item.Storage.stack => |stack| {
-                        rl.drawTexturePro(
-                            self.atlas,
-                            stack.texture,
-                            rl.Rectangle.init(
-                                item.position.x,
-                                item.position.y,
-                                item.size.x,
-                                item.size.y,
-                            ),
-                            item.size.scale(0.5),
-                            item.rotation,
-                            rl.Color.white,
-                        );
-                        var offset = rl.Vector2.init(0.0, item.size.y * 0.5).rotate(item.rotation * std.math.rad_per_deg);
-                        var from: isize, const to: isize, const delta: isize = switch (stack.direction) {
-                            .down_top => .{ 0, @intCast(stack.cards.items.len), 1 },
-                            // .down_bottom => {},
-                            .up_top => .{ @intCast(stack.cards.items.len), -1, -1 },
-                            // .up_bottom => {},
-                            else => unreachable,
-                        };
-                        while (from != to) : (from += delta) {
-                            const drawn_item = &self.items.items[stack.cards.items[@intCast(from)]];
-                            if (drawn_item.storage != Item.Storage.card) {
-                                // Something's wrong...
-                                continue;
-                            }
-                            const drawn_card = &drawn_item.storage.card;
-                            const drawn_offset = offset.scale(@floatFromInt(from));
-                            rl.drawTexturePro(
-                                self.atlas,
-                                drawn_card.texture(),
-                                rl.Rectangle.init(
-                                    drawn_item.position.x + drawn_offset.x + item.position.x,
-                                    drawn_item.position.y + drawn_offset.y + item.position.y,
-                                    drawn_item.size.x,
-                                    drawn_item.size.y,
-                                ),
-                                drawn_item.size.scale(0.5),
-                                drawn_item.rotation + item.rotation,
-                                rl.Color.white,
-                            );
-                        }
-                    },
-                }
+            for (self.items.items) |*item| {
+                item.draw(self.atlas, self.items.items);
             }
         }
     }
@@ -507,47 +414,4 @@ pub const GameState = struct {
         }
         return if (best == null) null else best.?[0];
     }
-};
-
-pub const Item = struct {
-    size: rl.Vector2,
-    position: rl.Vector2,
-    rotation: f32,
-    storage: Storage,
-
-    pub const Storage = union(enum) {
-        card: Card,
-        deck: Deck,
-        stack: Stack,
-    };
-};
-pub const Card = struct {
-    parent: ?ItemID,
-    face_up: bool,
-    face_texture: GameTexture,
-    back_texture: GameTexture,
-
-    pub fn texture(self: *const @This()) GameTexture {
-        if (self.face_up) {
-            return self.face_texture;
-        } else {
-            return self.back_texture;
-        }
-    }
-};
-pub const Deck = struct {
-    cards: std.ArrayList(ItemID),
-    texture: GameTexture,
-};
-pub const Stack = struct {
-    cards: std.ArrayList(ItemID),
-    direction: StackDirection,
-    texture: GameTexture,
-
-    pub const StackDirection = enum {
-        down_top,
-        down_bottom,
-        up_top,
-        up_bottom,
-    };
 };

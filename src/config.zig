@@ -94,10 +94,10 @@ pub fn add_stack(alloc: std.mem.Allocator, items: *std.ArrayList(game.Item), sta
             },
             .texture = rect_from_uv(stack.uv),
             .direction = switch (stack.direction) {
-                .down_top => game.Stack.StackDirection.down_top,
-                .down_bottom => game.Stack.StackDirection.down_bottom,
-                .up_top => game.Stack.StackDirection.up_top,
-                .up_bottom => game.Stack.StackDirection.up_bottom,
+                .down_top => game.Item.Stack.StackDirection.down_top,
+                .down_bottom => game.Item.Stack.StackDirection.down_bottom,
+                .up_top => game.Item.Stack.StackDirection.up_top,
+                .up_bottom => game.Item.Stack.StackDirection.up_bottom,
             },
         } },
     }) catch unreachable;
