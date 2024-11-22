@@ -28,9 +28,8 @@ pub const GameState = struct {
     camera_snap: bool,
     atlas: rl.Texture,
     table_texture: GameTexture,
-    items: std.ArrayList(Item), // TODO: Make this into a hashmap
+    items: []Item,
     dragging: ?usize, // This better be merged into `TouchState`
-    hand: std.ArrayList(Item.Card),
     touch_state: TouchState,
 
     const TouchState = union(enum) {
@@ -56,10 +55,7 @@ pub const GameState = struct {
     };
 
     const Self = @This();
-    pub fn init(alloc: std.mem.Allocator, config_path: []const u8) !Self {
-        const config = try Config.parse(alloc, config_path);
-        defer config.deinit();
-
+    pub fn init(alloc: std.mem.Allocator, config: *const Config, items: []Item) !Self {
         return .{
             .alloc = alloc,
             .camera = rl.Camera2D{
@@ -74,20 +70,19 @@ pub const GameState = struct {
             .camera_rotation = 0.0,
             .camera_snap = true,
             .atlas = blk: {
-                var texture = rl.loadTexture(config.value.atlas_path);
+                var texture = rl.loadTexture(config.atlas_path);
                 rl.genTextureMipmaps(&texture);
                 break :blk texture;
             },
-            .table_texture = Config.rect_from_uv(config.value.table_uv),
+            .table_texture = Config.rect_from_uv(config.table_uv),
             .dragging = null,
-            .items = config.value.gen_items(alloc),
-            .hand = std.ArrayList(Item.Card).init(alloc),
+            .items = items,
             .touch_state = TouchState{ .none = 0.0 },
         };
     }
     pub fn deinit(self: *Self) void {
         rl.unloadTexture(self.atlas);
-        for (self.items.items) |item| {
+        for (self.items) |item| {
             switch (item.storage) {
                 Item.Storage.deck => |deck| {
                     deck.cards.deinit();
@@ -98,8 +93,6 @@ pub const GameState = struct {
                 else => {},
             }
         }
-        self.items.deinit();
-        self.hand.deinit();
     }
     pub fn update(self: *Self, delta: f32) void {
         const touch_points = rl.getTouchPointCount();
@@ -158,7 +151,7 @@ pub const GameState = struct {
                     },
                     1 => {
                         if (self.dragging) |dragging| {
-                            self.items.items[dragging].position = rl.getScreenToWorld2D(
+                            self.items[dragging].position = rl.getScreenToWorld2D(
                                 rl.getTouchPosition(0),
                                 self.camera,
                             );
@@ -168,7 +161,7 @@ pub const GameState = struct {
                         if (self.dragging) |dragging| {
                             self.touch_state = TouchState{
                                 .drag_rotate = .{
-                                    self.items.items[dragging].rotation,
+                                    self.items[dragging].rotation,
                                     rl.getTouchPosition(1).subtract(rl.getTouchPosition(0)),
                                 },
                             };
@@ -181,8 +174,8 @@ pub const GameState = struct {
                 switch (touch_points) {
                     0 => {
                         if (self.dragging) |dragging| {
-                            self.items.items[dragging].rotation = math.snap_angle(
-                                self.items.items[dragging].rotation,
+                            self.items[dragging].rotation = math.snap_angle(
+                                self.items[dragging].rotation,
                                 360.0,
                             );
                         }
@@ -191,8 +184,8 @@ pub const GameState = struct {
                     },
                     1 => {
                         if (self.dragging) |dragging| {
-                            self.items.items[dragging].rotation = math.snap_angle(
-                                self.items.items[dragging].rotation,
+                            self.items[dragging].rotation = math.snap_angle(
+                                self.items[dragging].rotation,
                                 360.0,
                             );
                         }
@@ -200,11 +193,11 @@ pub const GameState = struct {
                     },
                     2 => {
                         if (self.dragging) |dragging| {
-                            self.items.items[dragging].position = rl.getScreenToWorld2D(
+                            self.items[dragging].position = rl.getScreenToWorld2D(
                                 rl.getTouchPosition(0),
                                 self.camera,
                             );
-                            self.items.items[dragging].rotation = math.touch_rotate(
+                            self.items[dragging].rotation = math.touch_rotate(
                                 drag_rotate[0],
                                 drag_rotate[1],
                                 rl.getTouchPosition(1).subtract(rl.getTouchPosition(0)),
@@ -321,8 +314,8 @@ pub const GameState = struct {
                 rl.Color.white,
             );
 
-            for (self.items.items) |*item| {
-                item.draw(self.atlas, self.items.items);
+            for (self.items) |*item| {
+                item.draw(self.atlas, self.items);
             }
         }
     }
@@ -333,7 +326,7 @@ pub const GameState = struct {
             null,
         ) orelse return;
         if (tap) {
-            switch (self.items.items[to_drag].storage) {
+            switch (self.items[to_drag].storage) {
                 Item.Storage.card => |*card| {
                     card.face_up = !card.face_up;
                 },
@@ -341,21 +334,21 @@ pub const GameState = struct {
             }
             self.dragging = to_drag;
         } else {
-            switch (self.items.items[to_drag].storage) {
+            switch (self.items[to_drag].storage) {
                 Item.Storage.card => {
                     self.dragging = to_drag;
                 },
                 Item.Storage.deck => |*deck| {
                     if (deck.cards.items.len > 0) {
                         const new_drag = deck.cards.pop();
-                        self.items.items[new_drag].storage.card.parent = null;
+                        self.items[new_drag].storage.card.parent = null;
                         self.dragging = new_drag;
                     }
                 },
                 Item.Storage.stack => |*stack| {
                     if (stack.cards.items.len > 0) {
                         const new_drag = stack.cards.pop();
-                        self.items.items[new_drag].storage.card.parent = null;
+                        self.items[new_drag].storage.card.parent = null;
                         self.dragging = new_drag;
                     }
                 },
@@ -366,7 +359,7 @@ pub const GameState = struct {
         const dragging = self.dragging orelse return;
         defer self.dragging = null;
 
-        const dropped_item = &self.items.items[dragging];
+        const dropped_item = &self.items[dragging];
         if (dropped_item.storage != Item.Storage.card) {
             return;
         }
@@ -376,7 +369,7 @@ pub const GameState = struct {
             DROP_RADIUS,
             dragging,
         ) orelse return;
-        switch (self.items.items[drop].storage) {
+        switch (self.items[drop].storage) {
             Item.Storage.deck => |*deck| {
                 dropped_item.storage.card.parent = drop;
                 dropped_item.position = rl.Vector2.zero();
@@ -393,12 +386,12 @@ pub const GameState = struct {
         }
     }
     fn find_nearest_draggable(self: *const Self, position: rl.Vector2, radius: f32, excluding: ?usize) ?usize {
-        if (self.items.items.len == 0) {
+        if (self.items.len == 0) {
             return null;
         }
         const r2 = radius * radius;
         var best: ?struct { usize, f32 } = null;
-        for (self.items.items, 0..) |item, i| {
+        for (self.items, 0..) |item, i| {
             if (item.storage == Item.Storage.card and item.storage.card.parent != null) {
                 continue;
             }

@@ -1,6 +1,8 @@
 const std = @import("std");
 const rl = @import("raylib");
 const GameState = @import("game.zig").GameState;
+const Config = @import("config.zig");
+const Net = @import("net.zig");
 
 pub fn main() !void {
     const screen_width = 2880 * 3 / 4;
@@ -19,7 +21,18 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     const alloc = gpa.allocator();
-    var game_state = try GameState.init(alloc, "assets/debug_config.json");
+
+    const config = try Config.parse(alloc, "assets/debug_config.json");
+    defer config.deinit();
+
+    var net = try Net.init(alloc, &config.value);
+    defer net.deinit();
+
+    var game_state = try GameState.init(
+        alloc,
+        &config.value,
+        net.items.items,
+    );
     defer game_state.deinit();
 
     rl.setTargetFPS(60);
