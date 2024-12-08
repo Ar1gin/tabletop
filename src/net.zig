@@ -4,20 +4,22 @@ const Allocator = std.mem.Allocator;
 const Config = @import("config.zig");
 
 items: std.ArrayList(Item),
-stream: std.net.Stream,
+stream: ?std.net.Stream,
 
 const Self = @This();
 pub fn init(alloc: Allocator, config: *const Config) !Self {
     var args = std.process.args();
     _ = args.skip();
-    const arg = args.next().?;
-    var maybe_server: ?bool = null;
-    if (std.mem.eql(u8, arg, "server")) {
-        maybe_server = true;
-    }
-    if (std.mem.eql(u8, arg, "client")) {
-        maybe_server = false;
-    }
+    const maybe_server: ?bool = blk: {
+        const arg = args.next() orelse break :blk null;
+        if (std.mem.eql(u8, arg, "server")) {
+            break :blk true;
+        }
+        if (std.mem.eql(u8, arg, "client")) {
+            break :blk false;
+        }
+        @panic("Invalid argument provided");
+    };
 
     return .{
         .items = config.gen_items(alloc),
@@ -31,11 +33,13 @@ pub fn init(alloc: Allocator, config: *const Config) !Self {
                 const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 37000);
                 break :blk try std.net.tcpConnectToAddress(addr);
             },
-        } else @panic("Invalid argument provided"),
+        } else null,
     };
 }
 
 pub fn deinit(self: *const Self) void {
     self.items.deinit();
-    self.stream.close();
+    if (self.stream) |stream| {
+        stream.close();
+    }
 }
