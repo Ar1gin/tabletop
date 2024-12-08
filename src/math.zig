@@ -84,7 +84,7 @@ pub fn calc_pinch(
     return .{ .z = z2, .r = r2, .t = rl.Vector2.init(t2.re, t2.im) };
 }
 
-pub fn touch_rotate(rotation: f32, start: rl.Vector2, end: rl.Vector2, comptime tau: f32, comptime factor: f32) f32 {
+pub fn touch_rotate(start: rl.Vector2, end: rl.Vector2, comptime tau: f32, comptime factor: f32) f32 {
     const mult = comptime blk: {
         break :blk tau / std.math.tau * factor;
     };
@@ -92,13 +92,5 @@ pub fn touch_rotate(rotation: f32, start: rl.Vector2, end: rl.Vector2, comptime 
         Complex.init(end.x, end.y),
         Complex.init(start.x, start.y),
     );
-    const rotation_delta = std.math.atan2(normalized.im, normalized.re) * mult;
-    const rotation_total = rotation + rotation_delta;
-    if (rotation_total < 0.0) {
-        return rotation_total + tau;
-    }
-    if (rotation_total >= tau) {
-        return rotation_total - tau;
-    }
-    return rotation_total;
+    return std.math.atan2(normalized.im, normalized.re) * mult;
 }

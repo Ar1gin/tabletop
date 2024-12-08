@@ -1,22 +1,17 @@
 const std = @import("std");
+const math = @import("math.zig");
 const rl = @import("raylib");
 const rg = @import("raygui");
-const math = @import("math.zig");
+const Input = @import("input.zig");
+const Config = @import("config.zig");
 pub const Item = @import("item.zig");
 
-const Config = @import("config.zig");
+const FIELD_SIZE: f32 = 16.0;
+const DRAG_RADIUS: f32 = 1.5;
+const DROP_RADIUS: f32 = 0.5;
 
 pub const GameTexture = rl.Rectangle;
 pub const ItemID = usize;
-
-const FIELD_SIZE: f32 = 16.0;
-
-const DRAG_INIT_RADIUS: f32 = 64.0;
-const TOUCH_RADIUS: f32 = 1.5;
-const DROP_RADIUS: f32 = 0.5;
-
-const HOLD_THRESHOLD = 0.5;
-const DOUBLE_THRESHOLD: f32 = 0.2;
 
 pub const GameState = struct {
     alloc: std.mem.Allocator,
@@ -29,30 +24,7 @@ pub const GameState = struct {
     atlas: rl.Texture,
     table_texture: GameTexture,
     items: []Item,
-    dragging: ?usize, // This better be merged into `TouchState`
-    touch_state: TouchState,
-
-    const TouchState = union(enum) {
-        none: f32, // Time since last press
-        pressed: struct {
-            rl.Vector2, // Initial position
-            f32, // Hold time
-            bool, // Double
-        },
-        drag,
-        drag_rotate: struct {
-            f32, // Initial drag delta
-            rl.Vector2, // Initial delta
-        },
-        panning: struct {
-            rl.Vector2, // Initial tap 1
-            rl.Vector2, // Initial tap 2
-            f32, // Resolution
-            f32, // Zoom
-            f32, // Rotation
-            rl.Vector2, // Target
-        },
-    };
+    input: Input,
 
     const Self = @This();
     pub fn init(alloc: std.mem.Allocator, config: *const Config, items: []Item) !Self {
@@ -75,9 +47,8 @@ pub const GameState = struct {
                 break :blk texture;
             },
             .table_texture = Config.rect_from_uv(config.table_uv),
-            .dragging = null,
             .items = items,
-            .touch_state = TouchState{ .none = 0.0 },
+            .input = Input.default(),
         };
     }
     pub fn deinit(self: *Self) void {
@@ -95,167 +66,7 @@ pub const GameState = struct {
         }
     }
     pub fn update(self: *Self, delta: f32) void {
-        const touch_points = rl.getTouchPointCount();
-        // TODO: use `continue :blk` to rerun touch update on state change
-        switch (self.touch_state) {
-            TouchState.none => |*time| {
-                switch (touch_points) {
-                    0 => time.* += delta,
-                    1 => self.touch_state = TouchState{ .pressed = .{ rl.getTouchPosition(0), 0.0, time.* < DOUBLE_THRESHOLD } },
-                    2 => self.touch_state = TouchState{ .panning = .{
-                        rl.getTouchPosition(0),
-                        rl.getTouchPosition(1),
-                        self.camera_resolution,
-                        self.camera_zoom,
-                        self.camera_rotation,
-                        self.camera_position,
-                    } },
-                    else => {},
-                }
-            },
-            TouchState.pressed => |*pressed| {
-                switch (touch_points) {
-                    0 => self.touch_state = TouchState{ .none = 0.0 },
-                    1 => {
-                        pressed[1] += delta;
-                        if (pressed[2] or pressed[0].distanceSqr(rl.getTouchPosition(0)) >= DRAG_INIT_RADIUS) {
-                            self.start_drag(rl.getTouchPosition(0), pressed[2]);
-                            self.touch_state = TouchState.drag;
-                        } else if (pressed[1] >= HOLD_THRESHOLD) {
-                            // TODO: Hold
-                        }
-                    },
-                    2 => {
-                        if (pressed[1] < HOLD_THRESHOLD) {
-                            self.touch_state = TouchState{ .panning = .{
-                                rl.getTouchPosition(0),
-                                rl.getTouchPosition(1),
-                                self.camera_resolution,
-                                self.camera_zoom,
-                                self.camera_rotation,
-                                self.camera_position,
-                            } };
-                        } else {
-                            self.start_drag(rl.getTouchPosition(0), false);
-                            self.touch_state = TouchState.drag;
-                        }
-                    },
-                    else => {},
-                }
-            },
-            TouchState.drag => {
-                switch (touch_points) {
-                    0 => {
-                        self.stop_drag();
-                        self.touch_state = TouchState{ .none = DOUBLE_THRESHOLD };
-                    },
-                    1 => {
-                        if (self.dragging) |dragging| {
-                            self.items[dragging].position = rl.getScreenToWorld2D(
-                                rl.getTouchPosition(0),
-                                self.camera,
-                            );
-                        }
-                    },
-                    2 => {
-                        if (self.dragging) |dragging| {
-                            self.touch_state = TouchState{
-                                .drag_rotate = .{
-                                    self.items[dragging].rotation,
-                                    rl.getTouchPosition(1).subtract(rl.getTouchPosition(0)),
-                                },
-                            };
-                        }
-                    },
-                    else => {},
-                }
-            },
-            TouchState.drag_rotate => |drag_rotate| {
-                switch (touch_points) {
-                    0 => {
-                        if (self.dragging) |dragging| {
-                            self.items[dragging].rotation = math.snap_angle(
-                                self.items[dragging].rotation,
-                                360.0,
-                            );
-                        }
-                        self.stop_drag();
-                        self.touch_state = TouchState{ .none = DOUBLE_THRESHOLD };
-                    },
-                    1 => {
-                        if (self.dragging) |dragging| {
-                            self.items[dragging].rotation = math.snap_angle(
-                                self.items[dragging].rotation,
-                                360.0,
-                            );
-                        }
-                        self.touch_state = TouchState.drag;
-                    },
-                    2 => {
-                        if (self.dragging) |dragging| {
-                            self.items[dragging].position = rl.getScreenToWorld2D(
-                                rl.getTouchPosition(0),
-                                self.camera,
-                            );
-                            self.items[dragging].rotation = math.touch_rotate(
-                                drag_rotate[0],
-                                drag_rotate[1],
-                                rl.getTouchPosition(1).subtract(rl.getTouchPosition(0)),
-                                360.0,
-                                2.0,
-                            );
-                        }
-                    },
-                    else => {},
-                }
-            },
-            TouchState.panning => |*panning| {
-                switch (touch_points) {
-                    0 => {
-                        self.touch_state = TouchState{ .none = DOUBLE_THRESHOLD };
-
-                        self.camera_snap = false;
-                        if (self.camera_zoom >= 16.0) {
-                            self.camera_zoom = 16.0;
-                        }
-                        if (self.camera_zoom < 0.5) {
-                            self.camera_zoom = 0.5;
-                        }
-                        if (self.camera_position.x > FIELD_SIZE) {
-                            self.camera_position.x = FIELD_SIZE;
-                        }
-                        if (self.camera_position.y > FIELD_SIZE) {
-                            self.camera_position.y = FIELD_SIZE;
-                        }
-                        if (self.camera_position.x < -FIELD_SIZE) {
-                            self.camera_position.x = -FIELD_SIZE;
-                        }
-                        if (self.camera_position.y < -FIELD_SIZE) {
-                            self.camera_position.y = -FIELD_SIZE;
-                        }
-                        // NOTE: Snap angles to 45 degress for now.
-                        self.camera_rotation = math.snap_angle(self.camera_rotation, std.math.tau);
-                    },
-                    2 => {
-                        self.camera_snap = true;
-                        const pinch = math.calc_pinch(
-                            panning[0],
-                            panning[1],
-                            rl.getTouchPosition(0),
-                            rl.getTouchPosition(1),
-                            panning[2] * panning[3],
-                            panning[4],
-                            panning[5],
-                            self.camera.offset,
-                        );
-                        self.camera_zoom = pinch.z / panning[2];
-                        self.camera_rotation = pinch.r;
-                        self.camera_position = pinch.t;
-                    },
-                    else => {},
-                }
-            },
-        }
+        self.input.update(self, delta);
 
         const vzoom = @as(f32, @floatFromInt(rl.getScreenHeight())) / FIELD_SIZE;
         const hzoom = @as(f32, @floatFromInt(rl.getScreenWidth())) / FIELD_SIZE;
@@ -319,46 +130,44 @@ pub const GameState = struct {
             }
         }
     }
-    fn start_drag(self: *Self, position: rl.Vector2, tap: bool) void {
+    pub fn start_drag(self: *Self, position: rl.Vector2, whole: bool, radius: f32) ?usize {
         const to_drag = self.find_nearest_draggable(
             rl.getScreenToWorld2D(position, self.camera),
-            TOUCH_RADIUS,
+            radius,
             null,
-        ) orelse return;
-        if (tap) {
+        ) orelse return null;
+        if (whole) {
             switch (self.items[to_drag].storage) {
                 Item.Storage.card => |*card| {
                     card.face_up = !card.face_up;
                 },
                 else => {},
             }
-            self.dragging = to_drag;
+            return to_drag;
         } else {
             switch (self.items[to_drag].storage) {
                 Item.Storage.card => {
-                    self.dragging = to_drag;
+                    return to_drag;
                 },
                 Item.Storage.deck => |*deck| {
                     if (deck.cards.items.len > 0) {
                         const new_drag = deck.cards.pop();
                         self.items[new_drag].storage.card.parent = null;
-                        self.dragging = new_drag;
+                        return new_drag;
                     }
                 },
                 Item.Storage.stack => |*stack| {
                     if (stack.cards.items.len > 0) {
                         const new_drag = stack.cards.pop();
                         self.items[new_drag].storage.card.parent = null;
-                        self.dragging = new_drag;
+                        return new_drag;
                     }
                 },
             }
         }
+        return null;
     }
-    fn stop_drag(self: *Self) void {
-        const dragging = self.dragging orelse return;
-        defer self.dragging = null;
-
+    pub fn stop_drag(self: *Self, dragging: usize, radius: f32) void {
         const dropped_item = &self.items[dragging];
         if (dropped_item.storage != Item.Storage.card) {
             return;
@@ -366,7 +175,7 @@ pub const GameState = struct {
 
         const drop = self.find_nearest_draggable(
             dropped_item.position,
-            DROP_RADIUS,
+            radius,
             dragging,
         ) orelse return;
         switch (self.items[drop].storage) {
