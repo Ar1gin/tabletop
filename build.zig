@@ -1,5 +1,10 @@
 const std = @import("std");
 
+const SHADERS: []const struct { file: []const u8, stage: []const u8 } = &.{
+    .{ .file = "basic", .stage = "vert" },
+    .{ .file = "basic", .stage = "frag" },
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -13,6 +18,16 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
     exe.linkLibC();
     exe.linkSystemLibrary("SDL3");
+
+    inline for (SHADERS) |shader| {
+        const glslc = b.addSystemCommand(&.{"glslc"});
+        glslc.addArg("-fshader-stage=" ++ shader.stage);
+        glslc.addFileArg(b.path("assets/shaders/" ++ shader.file ++ "." ++ shader.stage));
+        glslc.addArg("-o");
+        const filename = shader.file ++ "_" ++ shader.stage ++ ".spv";
+        const shader_artifact = glslc.addOutputFileArg(filename);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(shader_artifact, .prefix, filename).step);
+    }
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
