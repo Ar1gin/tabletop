@@ -1,31 +1,14 @@
 const std = @import("std");
 const sdl = @import("sdl.zig");
+const Graphics = @import("graphics.zig");
 
-renderer: ?*sdl.SDL_Renderer,
-window: ?*sdl.SDL_Window,
+graphics: Graphics,
 running: bool,
 
 const Self = @This();
 pub fn init() GameError!Self {
-    if (!sdl.SDL_Init(sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_EVENTS)) return GameError.SdlError;
-
-    var renderer: ?*sdl.SDL_Renderer = null;
-    var window: ?*sdl.SDL_Window = null;
-
-    if (!sdl.SDL_CreateWindowAndRenderer(
-        "Spacefarer",
-        1600,
-        900,
-        sdl.SDL_WINDOW_VULKAN,
-        &window,
-        &renderer,
-    )) return GameError.SdlError;
-
-    if (!sdl.SDL_SetRenderVSync(renderer, sdl.SDL_RENDERER_VSYNC_ADAPTIVE)) return GameError.SdlError;
-
     return Self{
-        .renderer = renderer,
-        .window = window,
+        .graphics = try Graphics.create(),
         .running = false,
     };
 }
@@ -47,9 +30,8 @@ fn update(self: *Self) GameError!void {
 }
 
 fn draw(self: *Self) GameError!void {
-    if (!sdl.SDL_SetRenderDrawColor(self.renderer, 0, 0, 0, 255)) return GameError.SdlError;
-    if (!sdl.SDL_RenderClear(self.renderer)) return GameError.SdlError;
-    if (!sdl.SDL_RenderPresent(self.renderer)) return GameError.SdlError;
+    try self.graphics.begin_draw();
+    try self.graphics.end_draw();
 }
 
 fn process_events(self: *Self) GameError!void {
@@ -78,8 +60,7 @@ fn process_event(self: *Self, event: sdl.SDL_Event) void {
 }
 
 pub fn deinit(self: *Self) void {
-    sdl.SDL_DestroyRenderer(self.renderer);
-    sdl.SDL_DestroyWindow(self.window);
+    self.graphics.destroy();
     sdl.SDL_Quit();
 }
 
