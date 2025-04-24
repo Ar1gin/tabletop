@@ -12,7 +12,10 @@ shader_vert: *sdl.SDL_GPUShader,
 shader_frag: *sdl.SDL_GPUShader,
 
 vertex_buffer: *sdl.SDL_GPUBuffer,
+depth_texture: *sdl.SDL_GPUTexture,
 pipeline: *sdl.SDL_GPUGraphicsPipeline,
+
+to_resize: ?struct { u32, u32 } = null,
 
 const Self = @This();
 pub fn create() GameError!Self {
@@ -27,7 +30,7 @@ pub fn create() GameError!Self {
         "Spacefarer",
         1600,
         900,
-        sdl.SDL_WINDOW_VULKAN,
+        sdl.SDL_WINDOW_VULKAN | sdl.SDL_WINDOW_RESIZABLE,
         &window,
         &renderer,
     )) return GameError.SdlError;
@@ -64,13 +67,13 @@ pub fn create() GameError!Self {
 
     const vertex_buffer = sdl.SDL_CreateGPUBuffer(device, &.{
         .usage = sdl.SDL_GPU_BUFFERUSAGE_VERTEX,
-        // 6 Vertices * 2 Coordinates * 4 Bytes
-        .size = 6 * 2 * 4,
+        // 6 Vertices * 3 Coordinates * 4 Bytes
+        .size = 6 * 3 * 4,
     }) orelse return GameError.SdlError;
     errdefer sdl.SDL_ReleaseGPUBuffer(device, vertex_buffer);
 
     const transfer_buffer = sdl.SDL_CreateGPUTransferBuffer(device, &.{
-        .size = 6 * 2 * 4,
+        .size = 6 * 3 * 4,
         .usage = sdl.SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
     }) orelse return GameError.SdlError;
     defer sdl.SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
@@ -78,15 +81,15 @@ pub fn create() GameError!Self {
     { // Filling up transfer buffer
         const mapped_buffer: [*c]f32 = @alignCast(@ptrCast(sdl.SDL_MapGPUTransferBuffer(device, transfer_buffer, false) orelse return GameError.SdlError));
         defer sdl.SDL_UnmapGPUTransferBuffer(device, transfer_buffer);
-        std.mem.copyForwards(f32, mapped_buffer[0 .. 6 * 2], &[6 * 2]f32{
-            // Triangle 1 (clockwise)
-            0.0, 0.0,
-            1.0, 0.0,
-            0.0, 1.0,
-            // Triangle 2 (counter-clockwise)
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0,
+        std.mem.copyForwards(f32, mapped_buffer[0 .. 6 * 3], &[6 * 3]f32{
+            // Triangle 1
+            -1.0, 0.0,  0.0,
+            0.0,  1.0,  0.0,
+            1.0,  -1.0, 1.0,
+            // Triangle 2
+            1.0,  0.0,  0.0,
+            0.0,  -1.0, 0.0,
+            -1.0, 1.0,  1.0,
         });
     }
 
@@ -95,7 +98,7 @@ pub fn create() GameError!Self {
         const copy_pass = sdl.SDL_BeginGPUCopyPass(command_buffer) orelse return GameError.SdlError;
 
         sdl.SDL_UploadToGPUBuffer(copy_pass, &.{ .transfer_buffer = transfer_buffer }, &.{
-            .size = 6 * 2 * 4,
+            .size = 6 * 3 * 4,
             .buffer = vertex_buffer,
         }, false);
 
@@ -106,28 +109,35 @@ pub fn create() GameError!Self {
     const target_format = sdl.SDL_GetGPUSwapchainTextureFormat(device, window);
     if (target_format == sdl.SDL_GPU_TEXTUREFORMAT_INVALID) return GameError.SdlError;
 
+    // TODO: Clean
+    var window_width: c_int = 1;
+    var window_height: c_int = 1;
+    if (!sdl.SDL_GetWindowSizeInPixels(window, &window_width, &window_height)) return GameError.SdlError;
+    const depth_texture = try create_depth_texture(device, @intCast(window_width), @intCast(window_height));
+    errdefer sdl.SDL_ReleaseGPUTexture(device, depth_texture);
+
     const pipeline = sdl.SDL_CreateGPUGraphicsPipeline(device, &.{
         .vertex_shader = shader_vert,
         .fragment_shader = shader_frag,
         .vertex_input_state = .{
             .vertex_buffer_descriptions = &.{
                 .slot = 0,
-                // 2 Coordinates * 4 Bytes
-                .pitch = 2 * 4,
+                // 3 Coordinates * 4 Bytes
+                .pitch = 3 * 4,
                 .input_rate = sdl.SDL_GPU_VERTEXINPUTRATE_VERTEX,
             },
             .num_vertex_buffers = 1,
             .vertex_attributes = &sdl.SDL_GPUVertexAttribute{
                 .offset = 0,
                 .location = 0,
-                .format = sdl.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2,
+                .format = sdl.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
                 .buffer_slot = 0,
             },
             .num_vertex_attributes = 1,
         },
         .primitive_type = sdl.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = .{
-            .cull_mode = sdl.SDL_GPU_CULLMODE_FRONT,
+            .cull_mode = sdl.SDL_GPU_CULLMODE_BACK,
             .fill_mode = sdl.SDL_GPU_FILLMODE_FILL,
             .front_face = sdl.SDL_GPU_FRONTFACE_CLOCKWISE,
         },
@@ -135,27 +145,27 @@ pub fn create() GameError!Self {
             // .sample_count = 1,
         },
         .depth_stencil_state = .{
-            // .compare_op = sdl.SDL_GPU_COMPAREOP_LESS,
-            .compare_op = sdl.SDL_GPU_COMPAREOP_ALWAYS,
-            // .enable_depth_test = true,
+            .compare_op = sdl.SDL_GPU_COMPAREOP_LESS,
+            .enable_depth_test = true,
+            .enable_depth_write = true,
         },
         .target_info = .{
-            // .depth_stencil_format = sdl.SDL_GPU_TEXTUREFORMAT_D16_UNORM,
+            .depth_stencil_format = sdl.SDL_GPU_TEXTUREFORMAT_D16_UNORM,
             .color_target_descriptions = &sdl.SDL_GPUColorTargetDescription{
                 .format = target_format,
                 .blend_state = .{
-                    // .enable_blend = true,
+                    .enable_blend = true,
                     .alpha_blend_op = sdl.SDL_GPU_BLENDOP_ADD,
                     .color_blend_op = sdl.SDL_GPU_BLENDOP_ADD,
                     .color_write_mask = sdl.SDL_GPU_COLORCOMPONENT_R | sdl.SDL_GPU_COLORCOMPONENT_G | sdl.SDL_GPU_COLORCOMPONENT_B | sdl.SDL_GPU_COLORCOMPONENT_A,
-                    .src_alpha_blendfactor = sdl.SDL_BLENDFACTOR_ONE,
-                    .src_color_blendfactor = sdl.SDL_BLENDFACTOR_SRC_ALPHA,
-                    .dst_alpha_blendfactor = sdl.SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-                    .dst_color_blendfactor = sdl.SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                    .src_alpha_blendfactor = sdl.SDL_GPU_BLENDFACTOR_ONE,
+                    .src_color_blendfactor = sdl.SDL_GPU_BLENDFACTOR_SRC_ALPHA,
+                    .dst_alpha_blendfactor = sdl.SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                    .dst_color_blendfactor = sdl.SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
                 },
             },
             .num_color_targets = 1,
-            // .has_depth_stencil_target = true,
+            .has_depth_stencil_target = true,
         },
     }) orelse return GameError.SdlError;
     errdefer sdl.SDL_ReleaseGPUGraphicsPipeline(pipeline);
@@ -168,6 +178,7 @@ pub fn create() GameError!Self {
         .shader_vert = shader_vert,
         .shader_frag = shader_frag,
         .vertex_buffer = vertex_buffer,
+        .depth_texture = depth_texture,
         .pipeline = pipeline,
     };
 }
@@ -178,6 +189,7 @@ pub fn destroy(self: *Self) void {
     sdl.SDL_DestroyWindow(self.window);
 
     sdl.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline);
+    sdl.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
     sdl.SDL_ReleaseGPUBuffer(self.device, self.vertex_buffer);
 
     sdl.SDL_ReleaseGPUShader(self.device, self.shader_vert);
@@ -192,13 +204,17 @@ pub fn destroy(self: *Self) void {
 
 pub fn begin_draw(self: *Self) GameError!void {
     self.command_buffer = sdl.SDL_AcquireGPUCommandBuffer(self.device) orelse return GameError.SdlError;
+    if (self.to_resize) |new_size| {
+        try self.reset_depth_texture(new_size[0], new_size[1]);
+        self.to_resize = null;
+    }
 }
 
 pub fn draw_debug(self: *Self) GameError!void {
     var render_target: ?*sdl.SDL_GPUTexture = null;
     var width: u32 = 0;
     var height: u32 = 0;
-    if (!sdl.SDL_AcquireGPUSwapchainTexture(self.command_buffer, self.window, &render_target, &width, &height)) return GameError.SdlError;
+    if (!sdl.SDL_WaitAndAcquireGPUSwapchainTexture(self.command_buffer, self.window, &render_target, &width, &height)) return GameError.SdlError;
     // Hidden
     if (render_target == null) return;
 
@@ -211,17 +227,16 @@ pub fn draw_debug(self: *Self) GameError!void {
         // .resolve_texture = render_target,
         .mip_level = 0,
         .texture = render_target,
-    }, 1, null) orelse return GameError.SdlError;
+    }, 1, &.{
+        .clear_depth = 1.0,
+        .load_op = sdl.SDL_GPU_LOADOP_CLEAR,
+        .store_op = sdl.SDL_GPU_STOREOP_DONT_CARE,
+        .stencil_load_op = sdl.SDL_GPU_STOREOP_DONT_CARE,
+        .stencil_store_op = sdl.SDL_GPU_STOREOP_DONT_CARE,
+        .texture = self.depth_texture,
+    }) orelse return GameError.SdlError;
 
     sdl.SDL_BindGPUGraphicsPipeline(render_pass, self.pipeline);
-    sdl.SDL_SetGPUViewport(render_pass, &.{
-        .x = 0.0,
-        .y = 0.0,
-        .w = 1.0,
-        .h = 1.0,
-        .min_depth = 0.0,
-        .max_depth = 1.0,
-    });
     sdl.SDL_BindGPUVertexBuffers(render_pass, 0, &.{ .offset = 0, .buffer = self.vertex_buffer }, 1);
     sdl.SDL_DrawGPUPrimitives(render_pass, 6, 1, 0, 0);
 
@@ -247,4 +262,24 @@ fn load_shader(device: *sdl.SDL_GPUDevice, path: []const u8, stage: c_uint) Game
         .format = sdl.SDL_GPU_SHADERFORMAT_SPIRV,
         .stage = stage,
     }) orelse return GameError.SdlError;
+}
+
+fn create_depth_texture(device: *sdl.SDL_GPUDevice, width: u32, height: u32) GameError!*sdl.SDL_GPUTexture {
+    return sdl.SDL_CreateGPUTexture(device, &.{
+        .format = sdl.SDL_GPU_TEXTUREFORMAT_D16_UNORM,
+        .layer_count_or_depth = 1,
+        .width = width,
+        .height = height,
+        .num_levels = 1,
+        .usage = sdl.SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+    }) orelse return GameError.SdlError;
+}
+
+fn reset_depth_texture(self: *Self, width: u32, height: u32) GameError!void {
+    sdl.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
+    self.depth_texture = try create_depth_texture(self.device, width, height);
+}
+
+pub fn resize(self: *Self, width: u32, height: u32) void {
+    self.to_resize = .{ width, height };
 }
