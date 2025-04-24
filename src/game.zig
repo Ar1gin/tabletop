@@ -31,6 +31,7 @@ fn update(self: *Self) GameError!void {
 
 fn draw(self: *Self) GameError!void {
     try self.graphics.begin_draw();
+    try self.graphics.draw_debug();
     try self.graphics.end_draw();
 }
 
@@ -66,4 +67,5 @@ pub fn deinit(self: *Self) void {
 
 pub const GameError = error{
     SdlError,
+    OSError,
 };
