@@ -30,6 +30,9 @@ pub fn build(b: *std.Build) void {
 
     for (SHADERS) |shader_path| {
         const glslc = b.addSystemCommand(&.{"glslc"});
+        if (optimize != .Debug) {
+            glslc.addArg("-O");
+        }
 
         const ext = std.fs.path.extension(shader_path);
         if (std.mem.eql(u8, ext, "vert")) {
@@ -46,6 +49,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const run_cmd = b.addRunArtifact(exe);
+    run_cmd.setCwd(b.path(std.fs.path.relative(b.allocator, b.build_root.path.?, b.exe_dir) catch unreachable));
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
