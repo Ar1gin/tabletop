@@ -57,6 +57,7 @@ fn process_event(self: *Self, event: sdl.SDL_Event) void {
             self.running = false;
         },
         sdl.SDL_EVENT_WINDOW_RESIZED => {
+            if (event.window.windowID != sdl.SDL_GetWindowID(self.graphics.window)) return;
             self.graphics.resize(@intCast(event.window.data1), @intCast(event.window.data2));
         },
         else => {},
