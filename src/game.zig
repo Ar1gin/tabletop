@@ -1,5 +1,5 @@
 const std = @import("std");
-const sdl = @import("sdl.zig");
+const sdl = @import("sdl");
 const Graphics = @import("graphics.zig");
 
 graphics: Graphics,
@@ -36,10 +36,10 @@ fn draw(self: *Self) GameError!void {
 }
 
 fn process_events(self: *Self) GameError!void {
-    sdl.SDL_PumpEvents();
+    sdl.PumpEvents();
     while (true) {
-        var buffer: [16]sdl.SDL_Event = undefined;
-        const count: usize = @intCast(sdl.SDL_PeepEvents(&buffer, buffer.len, sdl.SDL_GETEVENT, sdl.SDL_EVENT_FIRST, sdl.SDL_EVENT_LAST));
+        var buffer: [16]sdl.Event = undefined;
+        const count: usize = @intCast(sdl.PeepEvents(&buffer, buffer.len, sdl.GETEVENT, sdl.EVENT_FIRST, sdl.EVENT_LAST));
         if (count == -1) return GameError.SdlError;
         for (buffer[0..count]) |event| {
             self.process_event(event);
@@ -48,16 +48,16 @@ fn process_events(self: *Self) GameError!void {
             break;
         }
     }
-    sdl.SDL_FlushEvents(sdl.SDL_EVENT_FIRST, sdl.SDL_EVENT_LAST);
+    sdl.FlushEvents(sdl.EVENT_FIRST, sdl.EVENT_LAST);
 }
 
-fn process_event(self: *Self, event: sdl.SDL_Event) void {
+fn process_event(self: *Self, event: sdl.Event) void {
     switch (event.type) {
-        sdl.SDL_EVENT_QUIT => {
+        sdl.EVENT_QUIT => {
             self.running = false;
         },
-        sdl.SDL_EVENT_WINDOW_RESIZED => {
-            if (event.window.windowID != sdl.SDL_GetWindowID(self.graphics.window)) return;
+        sdl.EVENT_WINDOW_RESIZED => {
+            if (event.window.windowID != sdl.GetWindowID(self.graphics.window)) return;
             self.graphics.resize(@intCast(event.window.data1), @intCast(event.window.data2));
         },
         else => {},
@@ -66,7 +66,7 @@ fn process_event(self: *Self, event: sdl.SDL_Event) void {
 
 pub fn deinit(self: *Self) void {
     self.graphics.destroy();
-    sdl.SDL_Quit();
+    sdl.Quit();
 }
 
 pub const GameError = error{

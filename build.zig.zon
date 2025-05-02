@@ -1,11 +1,15 @@
 .{
-    .name = "spacefarer",
+    .name = .spacefarer,
     .version = "0.0.0",
+    .fingerprint = 0x946ddccb5911fb15,
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "lib",
+        "utils",
         "data",
     },
 }

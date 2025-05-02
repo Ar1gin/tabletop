@@ -1,5 +1,5 @@
 const std = @import("std");
-const sdl = @import("sdl.zig");
+const sdl = @import("sdl");
 const Game = @import("game.zig");
 
 pub fn run_game() !void {
