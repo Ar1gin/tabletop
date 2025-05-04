@@ -7,7 +7,7 @@ const System = @import("graph/system.zig");
 // - Use arena allocator?
 // - Resolve missing resource problem
 
-pub const Controller = Resource.Controller;
+pub const Controller = @import("graph/controller.zig");
 
 const MAX_SYSTEM_REQUESTS = 8;
 const DEFAULT_SYSTEM_CAPACITY = 16;

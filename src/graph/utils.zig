@@ -1,5 +1,6 @@
 const std = @import("std");
 const Resource = @import("resource.zig");
+const Controller = @import("controller.zig");
 const System = @import("system.zig");
 
 pub const Hash = u32;
@@ -35,18 +36,20 @@ pub fn validateSystem(comptime system: anytype) void {
     if (info.@"fn".is_var_args) @compileError("System cannot be variadic");
     if (info.@"fn".is_generic) @compileError("System cannot be generic");
 
-    const controller_requests: usize = 0;
-    inline for (info.@"fn".params) |param| {
-        if (@typeInfo(param.type.?) != .pointer) @compileError("Systems can only have pointer parameters");
-        switch (@typeInfo(param.type.?).pointer.child) {
-            Resource.Controller => {
-                // controller_requests += 1;
-                // _ = &controller_requests;
-            },
-            else => |t| validateResource(t),
+    comptime {
+        var controller_requests: usize = 0;
+        for (info.@"fn".params) |param| {
+            if (@typeInfo(param.type.?) != .pointer) @compileError("Systems can only have pointer parameters");
+            switch (@typeInfo(param.type.?).pointer.child) {
+                Controller => {
+                    controller_requests += 1;
+                    // _ = &controller_requests;
+                },
+                else => |t| validateResource(t),
+            }
         }
+        if (controller_requests > 1) @compileError("A system cannot request controller more than once");
     }
-    if (controller_requests > 1) @compileError("A system cannot request controller more than once");
 }
 
 pub fn generateRunner(comptime system: anytype) fn ([]const *anyopaque) void {

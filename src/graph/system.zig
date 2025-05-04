@@ -1,6 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const Controller = @import("resource.zig").Controller;
+const Controller = @import("controller.zig");
 
 function_runner: *const fn ([]const *anyopaque) void,
 requested_types: []const Request,
