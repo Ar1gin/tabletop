@@ -56,32 +56,32 @@ pub const Controller = struct {
     }
 
     /// Adds resource to the global storage, discarding any previously existing data
-    pub inline fn add_resource(self: *Controller, resource: anytype) void {
-        utils.validate_resource(@TypeOf(resource));
+    pub inline fn addResource(self: *Controller, resource: anytype) void {
+        utils.validateResource(@TypeOf(resource));
 
-        self.add_anyopaque_resource(
+        self.addAnyopaqueResource(
             @ptrCast(&resource),
-            utils.hash_type(@TypeOf(resource)),
+            utils.hashType(@TypeOf(resource)),
             @sizeOf(@TypeOf(resource)),
             @alignOf(@TypeOf(resource)),
         ) catch |err| self.fail(err);
     }
 
-    pub fn queue_system(self: *Controller, comptime function: anytype) void {
-        utils.validate_system(function);
+    pub fn queueSystem(self: *Controller, comptime function: anytype) void {
+        utils.validateSystem(function);
 
-        self.queue_system_internal(function) catch |err| self.fail(err);
+        self.queueSystemInternal(function) catch |err| self.fail(err);
     }
 
-    fn queue_system_internal(self: *Controller, comptime function: anytype) !void {
-        var system = try System.from_function(function, self.alloc);
+    fn queueSystemInternal(self: *Controller, comptime function: anytype) !void {
+        var system = try System.fromFunction(function, self.alloc);
         errdefer system.deinit(self.alloc);
 
         try self.command_buffer.append(self.alloc, .{ .queue_system = system });
     }
 
     /// `previous_output` is expected to be aligned accordingly
-    fn add_anyopaque_resource(
+    fn addAnyopaqueResource(
         self: *Controller,
         resource: *const anyopaque,
         hash: utils.Hash,

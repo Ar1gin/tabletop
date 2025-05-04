@@ -16,7 +16,7 @@ pub fn init() GameError!Self {
 pub fn run(self: *Self) GameError!void {
     self.running = true;
     while (true) {
-        try self.process_events();
+        try self.processEvents();
         if (!self.running) {
             break;
         }
@@ -30,19 +30,19 @@ fn update(self: *Self) GameError!void {
 }
 
 fn draw(self: *Self) GameError!void {
-    try self.graphics.begin_draw();
-    try self.graphics.draw_debug();
-    try self.graphics.end_draw();
+    try self.graphics.beginDraw();
+    try self.graphics.drawDebug();
+    try self.graphics.endDraw();
 }
 
-fn process_events(self: *Self) GameError!void {
+fn processEvents(self: *Self) GameError!void {
     sdl.PumpEvents();
     while (true) {
         var buffer: [16]sdl.Event = undefined;
         const count: usize = @intCast(sdl.PeepEvents(&buffer, buffer.len, sdl.GETEVENT, sdl.EVENT_FIRST, sdl.EVENT_LAST));
         if (count == -1) return GameError.SdlError;
         for (buffer[0..count]) |event| {
-            self.process_event(event);
+            self.processEvent(event);
         }
         if (count < buffer.len) {
             break;
@@ -51,7 +51,7 @@ fn process_events(self: *Self) GameError!void {
     sdl.FlushEvents(sdl.EVENT_FIRST, sdl.EVENT_LAST);
 }
 
-fn process_event(self: *Self, event: sdl.Event) void {
+fn processEvent(self: *Self, event: sdl.Event) void {
     switch (event.type) {
         sdl.EVENT_QUIT => {
             self.running = false;

@@ -70,22 +70,21 @@ pub fn deinit(self: *Self) void {
     self.controllers.deinit(self.alloc);
 }
 
-fn enqueue_system(self: *Self, system: System) !void {
+fn enqueueSystem(self: *Self, system: System) !void {
     errdefer system.deinit(self.alloc);
     try self.system_queue.append(self.alloc, system);
 }
 
-fn run_all_systems(self: *Self) GraphError!void {
-    while (self.system_queue.items.len > 0) {
-        const next_system = self.system_queue.pop();
+fn runAllSystems(self: *Self) GraphError!void {
+    while (self.system_queue.pop()) |next_system| {
         defer next_system.deinit(self.alloc);
 
-        try self.run_system(next_system);
+        try self.runSystem(next_system);
     }
 }
 
 /// Does not deallocate the system
-fn run_system(self: *Self, system: System) GraphError!void {
+fn runSystem(self: *Self, system: System) GraphError!void {
     var buffer: [MAX_SYSTEM_REQUESTS]*anyopaque = undefined;
     var controller: ?Controller = null;
     errdefer if (controller) |*c| c.deinit();
@@ -94,10 +93,10 @@ fn run_system(self: *Self, system: System) GraphError!void {
     for (system.requested_types) |request| {
         switch (request) {
             .resource => |resource| {
-                buffer[buffer_len] = self.get_anyopaque_resource(resource) orelse return GraphError.MissingResource;
+                buffer[buffer_len] = self.getAnyopaqueResource(resource) orelse return GraphError.MissingResource;
             },
             .controller => {
-                controller = try self.get_controller();
+                controller = try self.getController();
                 buffer[buffer_len] = @ptrCast(&controller.?);
             },
         }
@@ -107,44 +106,44 @@ fn run_system(self: *Self, system: System) GraphError!void {
 
     if (controller) |c| {
         defer controller = null;
-        try self.free_controller(c);
+        try self.freeController(c);
     }
 }
 
-fn apply_commands(self: *Self, commands: []const Controller.Command) !void {
+fn applyCommands(self: *Self, commands: []const Controller.Command) !void {
     for (commands) |command| {
         switch (command) {
-            .add_resource => |r| try self.add_resource(r),
-            .queue_system => |s| try self.enqueue_system(s),
+            .add_resource => |r| try self.addResource(r),
+            .queue_system => |s| try self.enqueueSystem(s),
         }
     }
 }
 
-fn get_controller(self: *Self) !Controller {
-    if (self.controllers.popOrNull()) |c| {
+fn getController(self: *Self) !Controller {
+    if (self.controllers.pop()) |c| {
         return c;
     }
     return Controller.create(self.alloc);
 }
 
 /// Evaluates and clears the controller (even if errors out)
-fn free_controller(self: *Self, controller: Controller) !void {
+fn freeController(self: *Self, controller: Controller) !void {
     var c = controller;
-    try self.apply_commands(c.commands());
+    try self.applyCommands(c.commands());
     c.clear();
     try self.controllers.append(self.alloc, c);
     // TODO: Handle controller error state
 }
 
-pub inline fn get_resource(self: *Self, comptime resource: type) ?*resource {
-    utils.validate_resource(resource);
-    if (get_anyopaque_resource(self, utils.hash_type(resource))) |ptr| {
+pub inline fn getResource(self: *Self, comptime resource: type) ?*resource {
+    utils.validateResource(resource);
+    if (getAnyopaqueResource(self, utils.hashType(resource))) |ptr| {
         return @alignCast(@ptrCast(ptr));
     }
     return null;
 }
 
-fn get_anyopaque_resource(self: *Self, resource_hash: utils.Hash) ?*anyopaque {
+fn getAnyopaqueResource(self: *Self, resource_hash: utils.Hash) ?*anyopaque {
     if (self.resources.get(resource_hash)) |resource| {
         return resource.pointer;
     }
@@ -152,7 +151,7 @@ fn get_anyopaque_resource(self: *Self, resource_hash: utils.Hash) ?*anyopaque {
 }
 
 /// Discards any previous resource data, resource is assumed to be allocated with `self.alloc`
-pub inline fn add_resource(self: *Self, resource: Resource) !void {
+pub inline fn addResource(self: *Self, resource: Resource) !void {
     var previous = try self.resources.fetchPut(self.alloc, resource.hash, resource);
     if (previous) |*p| {
         p.value.deinit(self.alloc);
@@ -169,35 +168,35 @@ test {
     const TestResource = struct {
         number: u32,
 
-        fn add_one(rsc: *@This()) void {
+        fn addOne(rsc: *@This()) void {
             rsc.number += 1;
         }
-        fn add_ten(rsc: *@This()) void {
+        fn addTen(rsc: *@This()) void {
             rsc.number += 10;
         }
-        fn add_eleven(cmd: *Controller) void {
-            cmd.queue_system(add_ten);
-            cmd.queue_system(add_one);
+        fn addEleven(cmd: *Controller) void {
+            cmd.queueSystem(addTen);
+            cmd.queuesystem(addOne);
         }
     };
 
     var graph = try Graph.init(std.testing.allocator);
     defer graph.deinit();
 
-    var controller = try graph.get_controller();
-    controller.add_resource(TestResource{ .number = 100 });
+    var controller = try graph.getController();
+    controller.addResource(TestResource{ .number = 100 });
 
-    controller.queue_system(TestResource.add_one);
-    controller.queue_system(TestResource.add_one);
+    controller.queueSystem(TestResource.addOne);
+    controller.queueSystem(TestResource.addOne);
 
-    controller.queue_system(TestResource.add_ten);
+    controller.queueSystem(TestResource.addTen);
 
-    controller.queue_system(TestResource.add_eleven);
+    controller.queueSystem(TestResource.addEleven);
 
-    try graph.free_controller(controller);
+    try graph.freeController(controller);
 
-    try graph.run_all_systems();
+    try graph.runAllSystems();
 
-    const result = graph.get_resource(TestResource);
+    const result = graph.getResource(TestResource);
     try std.testing.expectEqual(result.?.number, 123);
 }

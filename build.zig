@@ -11,10 +11,10 @@ pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = step_build_main(b, target, optimize);
+    const exe = stepBuildMain(b, target, optimize);
     b.installArtifact(exe);
 
-    const copy_data = step_copy_data(b, target, optimize);
+    const copy_data = stepCopyData(b, target, optimize);
     b.getInstallStep().dependOn(copy_data);
 
     const run = b.addRunArtifact(exe);
@@ -34,7 +34,7 @@ pub fn build(b: *Build) void {
     check_step.dependOn(&exe.step);
 }
 
-fn step_build_main(
+fn stepBuildMain(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -46,14 +46,14 @@ fn step_build_main(
         .optimize = optimize,
     });
 
-    const sdl_module, const sdl_step = step_sdl_module(b, target, optimize);
+    const sdl_module, const sdl_step = stepSdlModule(b, target, optimize);
     exe.root_module.addImport("sdl", sdl_module);
     exe.step.dependOn(sdl_step);
 
     return exe;
 }
 
-fn step_build_sdl_translator(
+fn stepBuildSdlTranslator(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -68,12 +68,12 @@ fn step_build_sdl_translator(
     return sdl_translator;
 }
 
-fn step_translate_sdl(
+fn stepTranslateSdl(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) struct { *Build.Step, Build.LazyPath } {
-    const sdl_translator = step_build_sdl_translator(b, target, optimize);
+    const sdl_translator = stepBuildSdlTranslator(b, target, optimize);
     const translate = b.addRunArtifact(sdl_translator);
     const sdl_rename = translate.addOutputFileArg("sdl_rename.h");
     return .{
@@ -82,7 +82,7 @@ fn step_translate_sdl(
     };
 }
 
-fn step_sdl_module(
+fn stepSdlModule(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -95,7 +95,7 @@ fn step_sdl_module(
     });
     sdl_module.linkSystemLibrary("SDL3", .{});
 
-    const translate_step, const sdl_rename = step_translate_sdl(b, target, optimize);
+    const translate_step, const sdl_rename = stepTranslateSdl(b, target, optimize);
     sdl_module.addIncludePath(sdl_rename.dirname());
 
     return .{
@@ -104,7 +104,7 @@ fn step_sdl_module(
     };
 }
 
-fn step_copy_data(
+fn stepCopyData(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -118,14 +118,14 @@ fn step_copy_data(
         .install_subdir = "data",
         .exclude_extensions = &.{ "vert", "frag" },
     });
-    const build_shaders = step_build_shaders(b, target, optimize);
+    const build_shaders = stepBuildShaders(b, target, optimize);
 
     copy_data_cmd.step.dependOn(build_shaders);
 
     return &copy_data_cmd.step;
 }
 
-fn step_build_shaders(
+fn stepBuildShaders(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
