@@ -13,6 +13,7 @@ shader_frag: *sdl.GPUShader,
 
 vertex_buffer: *sdl.GPUBuffer,
 depth_texture: *sdl.GPUTexture,
+msaa_resolve: *sdl.GPUTexture,
 pipeline: *sdl.GPUGraphicsPipeline,
 
 to_resize: ?struct { u32, u32 } = null,
@@ -113,8 +114,12 @@ pub fn create() GameError!Self {
     var window_width: c_int = 1;
     var window_height: c_int = 1;
     if (!sdl.GetWindowSizeInPixels(window, &window_width, &window_height)) return GameError.SdlError;
+
     const depth_texture = try create_depth_texture(device, @intCast(window_width), @intCast(window_height));
     errdefer sdl.ReleaseGPUTexture(device, depth_texture);
+
+    const msaa_resolve = try create_texture(device, @intCast(window_width), @intCast(window_height), target_format);
+    errdefer sdl.ReleaseGPUTexture(device, msaa_resolve);
 
     const pipeline = sdl.CreateGPUGraphicsPipeline(device, &.{
         .vertex_shader = shader_vert,
@@ -142,7 +147,7 @@ pub fn create() GameError!Self {
             .front_face = sdl.GPU_FRONTFACE_CLOCKWISE,
         },
         .multisample_state = .{
-            // .sample_count = 1,
+            .sample_count = sdl.GPU_SAMPLECOUNT_4,
         },
         .depth_stencil_state = .{
             .compare_op = sdl.GPU_COMPAREOP_LESS,
@@ -179,6 +184,7 @@ pub fn create() GameError!Self {
         .shader_frag = shader_frag,
         .vertex_buffer = vertex_buffer,
         .depth_texture = depth_texture,
+        .msaa_resolve = msaa_resolve,
         .pipeline = pipeline,
     };
 }
@@ -189,6 +195,7 @@ pub fn destroy(self: *Self) void {
     sdl.DestroyWindow(self.window);
 
     sdl.ReleaseGPUGraphicsPipeline(self.device, self.pipeline);
+    sdl.ReleaseGPUTexture(self.device, self.msaa_resolve);
     sdl.ReleaseGPUTexture(self.device, self.depth_texture);
     sdl.ReleaseGPUBuffer(self.device, self.vertex_buffer);
 
@@ -205,7 +212,7 @@ pub fn destroy(self: *Self) void {
 pub fn begin_draw(self: *Self) GameError!void {
     self.command_buffer = sdl.AcquireGPUCommandBuffer(self.device) orelse return GameError.SdlError;
     if (self.to_resize) |new_size| {
-        try self.reset_depth_texture(new_size[0], new_size[1]);
+        try self.reset_textures(new_size[0], new_size[1]);
         self.to_resize = null;
     }
 }
@@ -222,11 +229,11 @@ pub fn draw_debug(self: *Self) GameError!void {
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 },
         .cycle = false,
         .load_op = sdl.GPU_LOADOP_CLEAR,
-        // .store_op = sdl.GPU_STOREOP_RESOLVE,
-        .store_op = sdl.GPU_STOREOP_STORE,
-        // .resolve_texture = render_target,
+        .store_op = sdl.GPU_STOREOP_RESOLVE,
+        // .store_op = sdl.GPU_STOREOP_STORE,
+        .resolve_texture = render_target,
         .mip_level = 0,
-        .texture = render_target,
+        .texture = self.msaa_resolve,
     }, 1, &.{
         .clear_depth = 1.0,
         .load_op = sdl.GPU_LOADOP_CLEAR,
@@ -271,13 +278,31 @@ fn create_depth_texture(device: *sdl.GPUDevice, width: u32, height: u32) GameErr
         .width = width,
         .height = height,
         .num_levels = 1,
+        .sample_count = sdl.GPU_SAMPLECOUNT_4,
         .usage = sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
     }) orelse return GameError.SdlError;
 }
 
-fn reset_depth_texture(self: *Self, width: u32, height: u32) GameError!void {
+fn create_texture(device: *sdl.GPUDevice, width: u32, height: u32, format: c_uint) GameError!*sdl.GPUTexture {
+    return sdl.CreateGPUTexture(device, &.{
+        .format = format,
+        .layer_count_or_depth = 1,
+        .width = width,
+        .height = height,
+        .num_levels = 1,
+        .sample_count = sdl.GPU_SAMPLECOUNT_4,
+        .usage = sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
+    }) orelse return GameError.SdlError;
+}
+
+fn reset_textures(self: *Self, width: u32, height: u32) GameError!void {
     sdl.ReleaseGPUTexture(self.device, self.depth_texture);
     self.depth_texture = try create_depth_texture(self.device, width, height);
+
+    const target_format = sdl.SDL_GetGPUSwapchainTextureFormat(self.device, self.window);
+
+    sdl.ReleaseGPUTexture(self.device, self.msaa_resolve);
+    self.msaa_resolve = try create_texture(self.device, width, height, target_format);
 }
 
 pub fn resize(self: *Self, width: u32, height: u32) void {
