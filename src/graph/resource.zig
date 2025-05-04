@@ -20,6 +20,9 @@ pub const Controller = struct {
     alloc: std.mem.Allocator,
     command_buffer: std.ArrayListUnmanaged(Command),
     error_state: ErrorState,
+    duds: [*]System.Dud,
+    dud_range: struct { System.Dud.Id, System.Dud.Id },
+    submit_dud: ?System.Dud.Id,
 
     pub const Command = union(enum) {
         add_resource: Resource,
@@ -36,6 +39,9 @@ pub const Controller = struct {
             .alloc = alloc,
             .command_buffer = try std.ArrayListUnmanaged(Command).initCapacity(alloc, DEFAULT_CONTROLLER_CAPACITY),
             .error_state = .ok,
+            .duds = &[0]System.Dud{},
+            .dud_range = .{ 0, 0 },
+            .submit_dud = null,
         };
     }
 
@@ -45,7 +51,12 @@ pub const Controller = struct {
         return self.command_buffer.items;
     }
 
-    /// Clears the command buffer, but does not deallocate it's contents
+    pub fn setDuds(self: *Controller, start_id: System.Dud.Id, buffer: []System.Dud) void {
+        self.dud_range = .{ start_id, start_id + @as(System.Dud.Id, @intCast(buffer.len)) };
+        self.duds = @ptrCast(buffer);
+    }
+
+    /// Clears the command buffer for the next use (does not deallocate it's contents)
     pub fn clear(self: *Controller) void {
         self.command_buffer.clearRetainingCapacity();
         switch (self.error_state) {
@@ -53,6 +64,7 @@ pub const Controller = struct {
             .recoverable => |msg| self.alloc.free(msg),
         }
         self.error_state = .ok;
+        self.submit_dud = null;
     }
 
     /// Adds resource to the global storage, discarding any previously existing data
@@ -71,6 +83,59 @@ pub const Controller = struct {
         utils.validateSystem(function);
 
         self.queueSystemInternal(function) catch |err| self.fail(err);
+    }
+
+    /// Function sets are expected to be tuples of system functions
+    pub fn queueOrdered(
+        self: *Controller,
+        comptime function_set_first: anytype,
+        comptime function_set_second: anytype,
+    ) void {
+        self.queueOrderedInternal(function_set_first, function_set_second) catch |err| self.fail(err);
+    }
+
+    pub fn queueOrderedInternal(
+        self: *Controller,
+        comptime function_set_first: anytype,
+        comptime function_set_second: anytype,
+    ) !void {
+        if (self.dud_range[0] == self.dud_range[1]) {
+            // TODO: Make `Controller` request more ids
+            self.error_state = .unrecoverable;
+            return;
+        }
+        const commands_first = @typeInfo(@TypeOf(function_set_first)).@"struct".fields.len;
+        const commands_second = @typeInfo(@TypeOf(function_set_second)).@"struct".fields.len;
+        var new_commands: [commands_first + commands_second]Command = undefined;
+        var i: usize = 0;
+
+        errdefer for (0..i) |del_i| {
+            new_commands[del_i].queue_system.deinit(self.alloc);
+        };
+
+        std.debug.assert(self.duds[0].required_count == 0);
+        self.duds[0].required_count = commands_first;
+
+        const dud_id = self.dud_range[0];
+        self.duds += 1;
+        self.dud_range[0] += 1;
+
+        inline for (function_set_first) |fn_first| {
+            var system = try System.fromFunction(fn_first, self.alloc);
+            system.submit_dud = dud_id;
+            new_commands[i] = Command{ .queue_system = system };
+            i += 1;
+        }
+        inline for (function_set_second) |fn_second| {
+            var system = try System.fromFunction(fn_second, self.alloc);
+            system.requires_dud = dud_id;
+            system.submit_dud = self.submit_dud;
+            new_commands[i] = Command{ .queue_system = system };
+            i += 1;
+        }
+        std.debug.assert(i == new_commands.len);
+
+        try self.command_buffer.appendSlice(self.alloc, &new_commands);
     }
 
     fn queueSystemInternal(self: *Controller, comptime function: anytype) !void {

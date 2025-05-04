@@ -12,16 +12,19 @@ pub const Controller = Resource.Controller;
 const MAX_SYSTEM_REQUESTS = 8;
 const DEFAULT_SYSTEM_CAPACITY = 16;
 const DEFAULT_CONTROLLERS = 2;
+const DEFAULT_DUDS_PER_CONTROLLER = 4;
 
 const ResourceMap = std.AutoArrayHashMapUnmanaged(utils.Hash, Resource);
 const SystemQueue = std.ArrayListUnmanaged(System);
 const Controllers = std.ArrayListUnmanaged(Controller);
+const Duds = std.ArrayListUnmanaged(System.Dud);
 
 /// Assumed to be thread-safe
 alloc: std.mem.Allocator,
 resources: ResourceMap,
 system_queue: SystemQueue,
 controllers: Controllers,
+duds: Duds,
 
 const Self = @This();
 pub fn init(alloc: std.mem.Allocator) !Self {
@@ -38,8 +41,16 @@ pub fn init(alloc: std.mem.Allocator) !Self {
         controller.deinit();
     };
 
-    for (0..DEFAULT_CONTROLLERS) |_| {
-        const controller = try Controller.create(alloc);
+    var duds = try Duds.initCapacity(alloc, DEFAULT_CONTROLLERS * DEFAULT_DUDS_PER_CONTROLLER);
+    errdefer duds.deinit(alloc);
+
+    for (0..DEFAULT_CONTROLLERS * DEFAULT_DUDS_PER_CONTROLLER) |_| {
+        duds.appendAssumeCapacity(.{});
+    }
+
+    for (0..DEFAULT_CONTROLLERS) |i| {
+        var controller = try Controller.create(alloc);
+        controller.setDuds(@intCast(DEFAULT_DUDS_PER_CONTROLLER * i), duds.items[DEFAULT_DUDS_PER_CONTROLLER * i .. DEFAULT_DUDS_PER_CONTROLLER * (i + 1)]);
         controllers.appendAssumeCapacity(controller);
     }
 
@@ -48,6 +59,7 @@ pub fn init(alloc: std.mem.Allocator) !Self {
         .resources = resources,
         .system_queue = system_queue,
         .controllers = controllers,
+        .duds = duds,
     };
 }
 
@@ -68,6 +80,8 @@ pub fn deinit(self: *Self) void {
         controller.deinit();
     }
     self.controllers.deinit(self.alloc);
+
+    self.duds.deinit(self.alloc);
 }
 
 fn enqueueSystem(self: *Self, system: System) !void {
@@ -76,15 +90,41 @@ fn enqueueSystem(self: *Self, system: System) !void {
 }
 
 fn runAllSystems(self: *Self) GraphError!void {
-    while (self.system_queue.pop()) |next_system| {
-        defer next_system.deinit(self.alloc);
+    while (self.system_queue.items.len > 0) {
+        var swap_with = self.system_queue.items.len - 1;
 
+        while (true) {
+            const system = &self.system_queue.items[self.system_queue.items.len - 1];
+            if (system.requires_dud) |dud_id| {
+                if (self.duds.items[dud_id].required_count == 0) {
+                    break;
+                }
+            } else break;
+            if (swap_with > 1) {
+                swap_with -= 1;
+                std.mem.swap(
+                    System,
+                    &self.system_queue.items[self.system_queue.items.len - 1],
+                    &self.system_queue.items[swap_with],
+                );
+            } else {
+                return GraphError.SystemDeadlock;
+            }
+        }
+
+        const next_system = self.system_queue.pop().?;
+
+        defer next_system.deinit(self.alloc);
         try self.runSystem(next_system);
     }
 }
 
 /// Does not deallocate the system
 fn runSystem(self: *Self, system: System) GraphError!void {
+    if (system.requires_dud) |dud_id| {
+        std.debug.assert(self.duds.items[dud_id].required_count == 0);
+    }
+
     var buffer: [MAX_SYSTEM_REQUESTS]*anyopaque = undefined;
     var controller: ?Controller = null;
     errdefer if (controller) |*c| c.deinit();
@@ -103,6 +143,9 @@ fn runSystem(self: *Self, system: System) GraphError!void {
         buffer_len += 1;
     }
     system.function_runner(buffer[0..buffer_len]);
+    if (system.submit_dud) |dud_id| {
+        self.duds.items[dud_id].required_count -= 1;
+    }
 
     if (controller) |c| {
         defer controller = null;
@@ -123,7 +166,15 @@ fn getController(self: *Self) !Controller {
     if (self.controllers.pop()) |c| {
         return c;
     }
-    return Controller.create(self.alloc);
+    const next_dud_id = self.duds.items.len;
+    for (try self.duds.addManyAsSlice(self.alloc, DEFAULT_DUDS_PER_CONTROLLER)) |*dud| {
+        dud.required_count = 0;
+    }
+    errdefer self.duds.shrinkRetainingCapacity(self.duds.items.len - DEFAULT_DUDS_PER_CONTROLLER);
+
+    var controller = try Controller.create(self.alloc);
+    controller.setDuds(@intCast(next_dud_id), self.duds.items[next_dud_id .. next_dud_id + DEFAULT_DUDS_PER_CONTROLLER]);
+    return controller;
 }
 
 /// Evaluates and clears the controller (even if errors out)
@@ -161,6 +212,7 @@ pub inline fn addResource(self: *Self, resource: Resource) !void {
 const GraphError = error{
     MissingResource,
     OutOfMemory,
+    SystemDeadlock,
 };
 
 test {
@@ -174,9 +226,25 @@ test {
         fn addTen(rsc: *@This()) void {
             rsc.number += 10;
         }
+        fn addThousand(rsc: *@This()) void {
+            rsc.number += 1000;
+        }
+        fn subThousand(rsc: *@This()) void {
+            rsc.number -= 1000;
+        }
         fn addEleven(cmd: *Controller) void {
             cmd.queueSystem(addTen);
-            cmd.queuesystem(addOne);
+            cmd.queueSystem(addOne);
+
+            cmd.queueOrdered(.{
+                addThousand,
+                addThousand,
+                addThousand,
+            }, .{
+                subThousand,
+                subThousand,
+                subThousand,
+            });
         }
     };
 

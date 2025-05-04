@@ -4,6 +4,14 @@ const Controller = @import("resource.zig").Controller;
 
 function_runner: *const fn ([]const *anyopaque) void,
 requested_types: []const Request,
+requires_dud: ?Dud.Id,
+submit_dud: ?Dud.Id,
+
+pub const Dud = struct {
+    pub const Id = u16;
+
+    required_count: usize = 0,
+};
 
 pub const Request = union(enum) {
     resource: utils.Hash,
@@ -27,6 +35,8 @@ pub fn fromFunction(comptime function: anytype, alloc: std.mem.Allocator) !Self 
     return Self{
         .requested_types = try alloc.dupe(Request, &requests),
         .function_runner = utils.generateRunner(function),
+        .requires_dud = null,
+        .submit_dud = null,
     };
 }
 
