@@ -43,12 +43,38 @@ pub fn validateSystem(comptime system: anytype) void {
             switch (@typeInfo(param.type.?).pointer.child) {
                 Controller => {
                     controller_requests += 1;
-                    // _ = &controller_requests;
                 },
                 else => |t| validateResource(t),
             }
         }
         if (controller_requests > 1) @compileError("A system cannot request controller more than once");
+    }
+}
+
+pub fn validateSystemSet(comptime system_set: anytype) void {
+    comptime {
+        @setEvalBranchQuota(1000);
+        switch (@typeInfo(@TypeOf(system_set))) {
+            .@"fn" => validateSystem(system_set),
+            .@"struct" => |struct_info| {
+                for (struct_info.fields) |field_info| {
+                    switch (@typeInfo(field_info.type)) {
+                        .@"fn", .@"struct" => validateSystemSet(@field(system_set, field_info.name)),
+                        else => {
+                            if (checkIsField(field_info, "ordered", bool)) continue;
+                            @compileError("Invalid field \"" ++
+                                field_info.name ++
+                                "\" of type `" ++
+                                @typeName(field_info.type) ++
+                                "` in system set");
+                        },
+                    }
+                }
+            },
+            else => {
+                @compileError("System set must be either a function or a tuple (got `" ++ @typeName(@TypeOf(system_set)) ++ "`)");
+            },
+        }
     }
 }
 
@@ -63,4 +89,47 @@ pub fn generateRunner(comptime system: anytype) fn ([]const *anyopaque) void {
         }
     };
     return RunnerImpl.runner;
+}
+
+pub fn checkIsField(field: std.builtin.Type.StructField, field_name: []const u8, comptime field_type: type) bool {
+    if (!std.mem.eql(u8, field.name, field_name)) return false;
+    if (field.type != field_type) return false;
+    return true;
+}
+
+pub fn getOptionalTupleField(tuple: anytype, comptime field_name: []const u8, comptime default: anytype) @TypeOf(default) {
+    return comptime blk: {
+        for (@typeInfo(@TypeOf(tuple)).@"struct".fields) |field| {
+            if (!std.mem.eql(u8, field.name, field_name)) continue;
+            if (@TypeOf(default) != field.type)
+                @compileError("Cannot get tuple field `" ++
+                    field_name ++
+                    "` with type `" ++
+                    @typeName(@TypeOf(default)) ++
+                    "` (tuple field has type `" ++
+                    @typeName(field.type) ++
+                    "`)");
+            break :blk @field(tuple, field.name);
+        }
+        break :blk default;
+    };
+}
+
+pub fn countSystems(comptime tuple: anytype) usize {
+    return comptime blk: {
+        var total: usize = 0;
+        switch (@typeInfo(@TypeOf(tuple))) {
+            .@"fn" => total += 1,
+            .@"struct" => |struct_info| {
+                for (struct_info.fields) |field| {
+                    switch (@typeInfo(field.type)) {
+                        .@"fn", .@"struct" => total += countSystems(@field(tuple, field.name)),
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        }
+        break :blk total;
+    };
 }

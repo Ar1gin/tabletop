@@ -9,7 +9,6 @@ const DEFAULT_CONTROLLER_CAPACITY = 8;
 alloc: std.mem.Allocator,
 command_buffer: std.ArrayListUnmanaged(Command),
 error_state: ErrorState,
-duds: [*]System.Dud,
 dud_range: struct { System.Dud.Id, System.Dud.Id },
 submit_dud: ?System.Dud.Id,
 
@@ -28,7 +27,6 @@ pub fn create(alloc: std.mem.Allocator) !Controller {
         .alloc = alloc,
         .command_buffer = try std.ArrayListUnmanaged(Command).initCapacity(alloc, DEFAULT_CONTROLLER_CAPACITY),
         .error_state = .ok,
-        .duds = &[0]System.Dud{},
         .dud_range = .{ 0, 0 },
         .submit_dud = null,
     };
@@ -40,9 +38,15 @@ pub fn commands(self: *Controller) []const Command {
     return self.command_buffer.items;
 }
 
-pub fn setDuds(self: *Controller, start_id: System.Dud.Id, buffer: []System.Dud) void {
-    self.dud_range = .{ start_id, start_id + @as(System.Dud.Id, @intCast(buffer.len)) };
-    self.duds = @ptrCast(buffer);
+pub fn setDuds(self: *Controller, start_id: System.Dud.Id, end_id: System.Dud.Id) void {
+    self.dud_range = .{ start_id, end_id };
+}
+
+fn acquireDud(self: *Controller) ?System.Dud.Id {
+    if (self.dud_range[0] == self.dud_range[1]) return null;
+
+    defer self.dud_range[0] += 1;
+    return self.dud_range[0];
 }
 
 /// Clears the command buffer for the next use (does not deallocate it's contents)
@@ -68,70 +72,93 @@ pub inline fn addResource(self: *Controller, resource: anytype) void {
     ) catch |err| self.fail(err);
 }
 
-pub fn queueSystem(self: *Controller, comptime function: anytype) void {
-    utils.validateSystem(function);
+/// Queues a multitude of functions to be executed either in parallel or in ordered manner
+/// `system_set` can be either a `System`-like function or a tuple which may contain other system sets
+///
+/// Optional tuple fields that control the execution behavior of functions:
+///
+/// `ordered` - ensures that all systems specified in the tuple are executed in provided order
+pub fn queue(self: *Controller, comptime system_set: anytype) void {
+    utils.validateSystemSet(system_set);
 
-    self.queueSystemInternal(function) catch |err| self.fail(err);
+    self.queueInternal(system_set) catch |err| self.fail(err);
 }
 
-/// Function sets are expected to be tuples of system functions
-pub fn queueOrdered(
+fn queueInternal(self: *Controller, comptime system_set: anytype) !void {
+    const prev_count = self.command_buffer.items.len;
+
+    const command_buffer = try self.command_buffer.addManyAsSlice(self.alloc, utils.countSystems(system_set));
+    errdefer self.command_buffer.shrinkRetainingCapacity(prev_count);
+
+    const commands_created = try self.createQueueCommands(system_set, command_buffer, null, self.submit_dud);
+    std.debug.assert(commands_created == command_buffer.len);
+}
+
+fn createQueueCommands(
     self: *Controller,
-    comptime function_set_first: anytype,
-    comptime function_set_second: anytype,
-) void {
-    self.queueOrderedInternal(function_set_first, function_set_second) catch |err| self.fail(err);
-}
+    comptime system_set: anytype,
+    command_buffer: []Command,
+    requires_dud: ?System.Dud.Id,
+    submit_dud: ?System.Dud.Id,
+) !usize {
+    switch (@typeInfo(@TypeOf(system_set))) {
+        .@"fn" => {
+            var system = try System.fromFunction(system_set, self.alloc);
+            system.requires_dud = requires_dud;
+            system.submit_dud = submit_dud;
+            command_buffer[0] = .{ .queue_system = system };
+            return 1;
+        },
+        .@"struct" => {
+            const ordered = utils.getOptionalTupleField(system_set, "ordered", false);
+            var queued_total: usize = 0;
+            var prev_dud = requires_dud;
+            var next_dud = submit_dud;
 
-pub fn queueOrderedInternal(
-    self: *Controller,
-    comptime function_set_first: anytype,
-    comptime function_set_second: anytype,
-) !void {
-    if (self.dud_range[0] == self.dud_range[1]) {
-        // TODO: Make `Controller` request more ids
-        self.error_state = .unrecoverable;
-        return;
+            errdefer for (command_buffer[0..queued_total]) |command| {
+                command.queue_system.deinit(self.alloc);
+            };
+
+            if (ordered) {
+                next_dud = requires_dud;
+            }
+
+            var queued_sets: usize = 0;
+            var total_sets: usize = 0;
+            inline for (@typeInfo(@TypeOf(system_set)).@"struct".fields) |field| {
+                switch (@typeInfo(field.type)) {
+                    .@"fn", .@"struct" => total_sets += 1,
+                    else => {},
+                }
+            }
+
+            inline for (@typeInfo(@TypeOf(system_set)).@"struct".fields) |field| {
+                if (ordered) {
+                    prev_dud = next_dud;
+                    if (queued_sets == total_sets - 1) {
+                        next_dud = submit_dud;
+                    } else {
+                        // TODO: Soft fail
+                        next_dud = self.acquireDud().?;
+                    }
+                }
+                switch (@typeInfo(field.type)) {
+                    .@"fn", .@"struct" => {
+                        queued_total += try self.createQueueCommands(
+                            @field(system_set, field.name),
+                            command_buffer[queued_total..],
+                            prev_dud,
+                            next_dud,
+                        );
+                        queued_sets += 1;
+                    },
+                    else => {},
+                }
+            }
+            return queued_total;
+        },
+        else => @compileError("System set must be either a single function or a tuple of other system sets"),
     }
-    const commands_first = @typeInfo(@TypeOf(function_set_first)).@"struct".fields.len;
-    const commands_second = @typeInfo(@TypeOf(function_set_second)).@"struct".fields.len;
-    var new_commands: [commands_first + commands_second]Command = undefined;
-    var i: usize = 0;
-
-    errdefer for (0..i) |del_i| {
-        new_commands[del_i].queue_system.deinit(self.alloc);
-    };
-
-    std.debug.assert(self.duds[0].required_count == 0);
-    self.duds[0].required_count = commands_first;
-
-    const dud_id = self.dud_range[0];
-    self.duds += 1;
-    self.dud_range[0] += 1;
-
-    inline for (function_set_first) |fn_first| {
-        var system = try System.fromFunction(fn_first, self.alloc);
-        system.submit_dud = dud_id;
-        new_commands[i] = Command{ .queue_system = system };
-        i += 1;
-    }
-    inline for (function_set_second) |fn_second| {
-        var system = try System.fromFunction(fn_second, self.alloc);
-        system.requires_dud = dud_id;
-        system.submit_dud = self.submit_dud;
-        new_commands[i] = Command{ .queue_system = system };
-        i += 1;
-    }
-    std.debug.assert(i == new_commands.len);
-
-    try self.command_buffer.appendSlice(self.alloc, &new_commands);
-}
-
-fn queueSystemInternal(self: *Controller, comptime function: anytype) !void {
-    var system = try System.fromFunction(function, self.alloc);
-    errdefer system.deinit(self.alloc);
-
-    try self.command_buffer.append(self.alloc, .{ .queue_system = system });
 }
 
 /// `previous_output` is expected to be aligned accordingly

@@ -6,6 +6,8 @@ const System = @import("graph/system.zig");
 // TODO:
 // - Use arena allocator?
 // - Resolve missing resource problem
+// - Parse system sets into a properly defined data structure instead of relying on `@typeInfo`
+// - Find a better way to represent system sets
 
 pub const Controller = @import("graph/controller.zig");
 
@@ -50,7 +52,7 @@ pub fn init(alloc: std.mem.Allocator) !Self {
 
     for (0..DEFAULT_CONTROLLERS) |i| {
         var controller = try Controller.create(alloc);
-        controller.setDuds(@intCast(DEFAULT_DUDS_PER_CONTROLLER * i), duds.items[DEFAULT_DUDS_PER_CONTROLLER * i .. DEFAULT_DUDS_PER_CONTROLLER * (i + 1)]);
+        controller.setDuds(@intCast(DEFAULT_DUDS_PER_CONTROLLER * i), @intCast(DEFAULT_DUDS_PER_CONTROLLER * (i + 1)));
         controllers.appendAssumeCapacity(controller);
     }
 
@@ -95,12 +97,13 @@ fn runAllSystems(self: *Self) GraphError!void {
 
         while (true) {
             const system = &self.system_queue.items[self.system_queue.items.len - 1];
+
             if (system.requires_dud) |dud_id| {
                 if (self.duds.items[dud_id].required_count == 0) {
                     break;
                 }
             } else break;
-            if (swap_with > 1) {
+            if (swap_with > 0) {
                 swap_with -= 1;
                 std.mem.swap(
                     System,
@@ -137,6 +140,7 @@ fn runSystem(self: *Self, system: System) GraphError!void {
             },
             .controller => {
                 controller = try self.getController();
+                controller.?.submit_dud = system.submit_dud;
                 buffer[buffer_len] = @ptrCast(&controller.?);
             },
         }
@@ -157,7 +161,10 @@ fn applyCommands(self: *Self, commands: []const Controller.Command) !void {
     for (commands) |command| {
         switch (command) {
             .add_resource => |r| try self.addResource(r),
-            .queue_system => |s| try self.enqueueSystem(s),
+            .queue_system => |s| {
+                if (s.submit_dud) |submit_id| self.duds.items[submit_id].required_count += 1;
+                try self.enqueueSystem(s);
+            },
         }
     }
 }
@@ -173,7 +180,7 @@ fn getController(self: *Self) !Controller {
     errdefer self.duds.shrinkRetainingCapacity(self.duds.items.len - DEFAULT_DUDS_PER_CONTROLLER);
 
     var controller = try Controller.create(self.alloc);
-    controller.setDuds(@intCast(next_dud_id), self.duds.items[next_dud_id .. next_dud_id + DEFAULT_DUDS_PER_CONTROLLER]);
+    controller.setDuds(@intCast(next_dud_id), @intCast(next_dud_id + DEFAULT_DUDS_PER_CONTROLLER));
     return controller;
 }
 
@@ -215,7 +222,7 @@ const GraphError = error{
     SystemDeadlock,
 };
 
-test {
+test "simple graph smoke test" {
     const Graph = @This();
     const TestResource = struct {
         number: u32,
@@ -233,17 +240,21 @@ test {
             rsc.number -= 1000;
         }
         fn addEleven(cmd: *Controller) void {
-            cmd.queueSystem(addTen);
-            cmd.queueSystem(addOne);
+            cmd.queue(addTen);
+            cmd.queue(addOne);
 
-            cmd.queueOrdered(.{
-                addThousand,
-                addThousand,
-                addThousand,
-            }, .{
-                subThousand,
-                subThousand,
-                subThousand,
+            cmd.queue(.{
+                .first = .{
+                    addThousand,
+                    addThousand,
+                    addThousand,
+                },
+                .second = .{
+                    subThousand,
+                    subThousand,
+                    subThousand,
+                },
+                .ordered = true,
             });
         }
     };
@@ -254,12 +265,12 @@ test {
     var controller = try graph.getController();
     controller.addResource(TestResource{ .number = 100 });
 
-    controller.queueSystem(TestResource.addOne);
-    controller.queueSystem(TestResource.addOne);
+    controller.queue(TestResource.addOne);
+    controller.queue(TestResource.addOne);
 
-    controller.queueSystem(TestResource.addTen);
+    controller.queue(TestResource.addTen);
 
-    controller.queueSystem(TestResource.addEleven);
+    controller.queue(TestResource.addEleven);
 
     try graph.freeController(controller);
 
@@ -267,4 +278,74 @@ test {
 
     const result = graph.getResource(TestResource);
     try std.testing.expectEqual(result.?.number, 123);
+}
+
+test "complex queue graph smoke test" {
+    const Graph = @This();
+    const TestResource = struct {
+        const Rsc = @This();
+
+        data1: isize,
+        data2: isize,
+
+        fn queueManySystems(cmd: *Controller) void {
+            cmd.queue(.{
+                .@"0" = .{
+                    addTen,
+                    addTen,
+                    addTen,
+                    addTen,
+                    subTwenty,
+                },
+                // `data1` = 20
+                // `data2` = 5
+                .@"1" = .{
+                    mulTen,
+                    mulTen,
+                    mulTwo,
+                    mulTwo,
+                },
+                // `data1` = 8000
+                // `data2` = 9
+                .@"2" = .{
+                    subTwenty,
+                },
+                .ordered = true,
+                // `data1` = 7980
+                // `data2` = 10
+            });
+        }
+        fn addTen(rsc: *Rsc) void {
+            rsc.data1 += 10;
+            rsc.data2 += 1;
+        }
+        fn subTwenty(rsc: *Rsc) void {
+            rsc.data1 -= 20;
+            rsc.data2 += 1;
+        }
+        fn mulTen(rsc: *Rsc) void {
+            rsc.data1 *= 10;
+            rsc.data2 += 1;
+        }
+        fn mulTwo(rsc: *Rsc) void {
+            rsc.data1 *= 2;
+            rsc.data2 += 1;
+        }
+    };
+
+    var graph = try Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    var controller = try graph.getController();
+
+    controller.addResource(TestResource{ .data1 = 0, .data2 = 0 });
+    controller.queue(TestResource.queueManySystems);
+
+    try graph.freeController(controller);
+
+    try graph.runAllSystems();
+
+    const result = graph.getResource(TestResource).?;
+    try std.testing.expectEqual(7980, result.data1);
+    try std.testing.expectEqual(10, result.data2);
 }
