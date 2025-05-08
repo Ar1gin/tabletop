@@ -32,7 +32,8 @@ pub fn validateResource(comptime resource_type: type) void {
 pub fn validateSystem(comptime system: anytype) void {
     const info = @typeInfo(@TypeOf(system));
     if (info != .@"fn") @compileError("System can only be a function, got " ++ @typeName(system));
-    if (info.@"fn".return_type != void) @compileError("Systems are not allowed to return any value (" ++ @typeName(info.Fn.return_type.?) ++ " returned)");
+    if (@typeInfo(info.@"fn".return_type.?) != .void and
+        @typeInfo(info.@"fn".return_type.?) != .error_union) @compileError("Systems are not allowed to return any value (" ++ @typeName(info.@"fn".return_type.?) ++ " returned)");
     if (info.@"fn".is_var_args) @compileError("System cannot be variadic");
     if (info.@"fn".is_generic) @compileError("System cannot be generic");
 
@@ -85,7 +86,13 @@ pub fn generateRunner(comptime system: anytype) fn ([]const *anyopaque) void {
             inline for (0..@typeInfo(@TypeOf(system)).@"fn".params.len) |index| {
                 args[index] = @alignCast(@ptrCast(resources[index]));
             }
-            @call(.always_inline, system, args);
+            switch (@typeInfo(@typeInfo(@TypeOf(system)).@"fn".return_type.?)) {
+                .void => @call(.always_inline, system, args),
+                .error_union => @call(.always_inline, system, args) catch |err| {
+                    std.debug.print("System error: {s}\n", .{@errorName(err)});
+                },
+                else => unreachable,
+            }
         }
     };
     return RunnerImpl.runner;

@@ -8,6 +8,9 @@ const System = @import("graph/system.zig");
 // - Resolve missing resource problem
 // - Parse system sets into a properly defined data structure instead of relying on `@typeInfo`
 // - Find a better way to represent system sets
+// - Organize a better way to execute single commands on graph
+// - Handle system errors
+// - Removing of resources
 
 pub const Controller = @import("graph/controller.zig");
 
@@ -86,12 +89,40 @@ pub fn deinit(self: *Self) void {
     self.duds.deinit(self.alloc);
 }
 
+/// Clear all internal data in preparation for the next run cycle
+/// Does not clear any `Resource`s
+pub fn reset(self: *Self) void {
+    // Controller cleanup
+    for (self.controllers.items, 0..) |*controller, i| {
+        for (controller.commands()) |*command| {
+            switch (command.*) {
+                .add_resource => |*resource| resource.deinit(controller.alloc),
+                .queue_system => |*system| system.deinit(controller.alloc),
+            }
+        }
+        controller.clear();
+        controller.setDuds(
+            i * self.duds.items.len / self.controllers.items.len,
+            (i + 1) * self.duds.items.len / self.controllers.items.len,
+        );
+    }
+    // System cleanup
+    for (self.system_queue.items) |*system| {
+        system.deinit(self.alloc);
+    }
+    self.system_queue.clearRetainingCapacity();
+    // Duds cleanup
+    for (self.duds.items) |*dud| {
+        dud.required_count = 0;
+    }
+}
+
 fn enqueueSystem(self: *Self, system: System) !void {
     errdefer system.deinit(self.alloc);
     try self.system_queue.append(self.alloc, system);
 }
 
-fn runAllSystems(self: *Self) GraphError!void {
+pub fn runAllSystems(self: *Self) GraphError!void {
     while (self.system_queue.items.len > 0) {
         var swap_with = self.system_queue.items.len - 1;
 
@@ -169,7 +200,7 @@ fn applyCommands(self: *Self, commands: []const Controller.Command) !void {
     }
 }
 
-fn getController(self: *Self) !Controller {
+pub fn getController(self: *Self) !Controller {
     if (self.controllers.pop()) |c| {
         return c;
     }
@@ -185,7 +216,7 @@ fn getController(self: *Self) !Controller {
 }
 
 /// Evaluates and clears the controller (even if errors out)
-fn freeController(self: *Self, controller: Controller) !void {
+pub fn freeController(self: *Self, controller: Controller) !void {
     var c = controller;
     try self.applyCommands(c.commands());
     c.clear();

@@ -34,7 +34,7 @@ pub fn create(alloc: std.mem.Allocator) !Controller {
 
 /// Returns command queue, caller is responsible for freeing it's data
 /// Call `clean()` afterwards, to clear the command queue
-pub fn commands(self: *Controller) []const Command {
+pub fn commands(self: *Controller) []Command {
     return self.command_buffer.items;
 }
 

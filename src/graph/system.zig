@@ -8,9 +8,9 @@ requires_dud: ?Dud.Id,
 submit_dud: ?Dud.Id,
 
 pub const Dud = struct {
-    pub const Id = u16;
+    pub const Id = usize;
 
-    required_count: usize = 0,
+    required_count: u16 = 0,
 };
 
 pub const Request = union(enum) {
