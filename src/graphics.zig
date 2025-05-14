@@ -1,5 +1,8 @@
 const std = @import("std");
 const sdl = @import("sdl");
+const presets = @import("graphics/presets.zig");
+const Transform = @import("graphics/transform.zig");
+const Camera = @import("graphics/camera.zig");
 const GameError = @import("game.zig").GameError;
 
 window: *sdl.Window,
@@ -18,6 +21,23 @@ pipeline: *sdl.GPUGraphicsPipeline,
 
 to_resize: ?struct { u32, u32 } = null,
 
+const MESH_BYTES = MESH.len * 4;
+const MESH_VERTS = @divExact(MESH.len, 3);
+const MESH = [_]f32{
+    -1, 0,  4,
+    0,  1,  4,
+    1,  -1, 6,
+    1,  0,  4,
+    0,  -1, 4,
+    -1, 1,  6,
+    -1, 1,  6,
+    1,  1,  6,
+    -1, -1, 6,
+    1,  -1, 6,
+    -1, -1, 6,
+    1,  1,  6,
+};
+
 const Self = @This();
 pub fn create() GameError!Self {
     // Init
@@ -28,7 +48,7 @@ pub fn create() GameError!Self {
     var window: ?*sdl.Window = null;
 
     if (!sdl.CreateWindowAndRenderer(
-        "Spacefarer",
+        "",
         1600,
         900,
         sdl.WINDOW_VULKAN | sdl.WINDOW_RESIZABLE,
@@ -55,26 +75,35 @@ pub fn create() GameError!Self {
     const shader_vert = try loadShader(
         device,
         "data/shaders/basic.vert",
-        sdl.GPU_SHADERSTAGE_VERTEX,
+        .{
+            .entrypoint = "main",
+            .format = sdl.GPU_SHADERFORMAT_SPIRV,
+            .stage = sdl.GPU_SHADERSTAGE_VERTEX,
+            .num_uniform_buffers = 2,
+        },
     );
     errdefer sdl.ReleaseGPUShader(device, shader_vert);
 
     const shader_frag = try loadShader(
         device,
         "data/shaders/basic.frag",
-        sdl.GPU_SHADERSTAGE_FRAGMENT,
+        .{
+            .entrypoint = "main",
+            .format = sdl.GPU_SHADERFORMAT_SPIRV,
+            .stage = sdl.GPU_SHADERSTAGE_FRAGMENT,
+        },
     );
     errdefer sdl.ReleaseGPUShader(device, shader_frag);
 
     const vertex_buffer = sdl.CreateGPUBuffer(device, &.{
         .usage = sdl.GPU_BUFFERUSAGE_VERTEX,
-        // 6 Vertices * 3 Coordinates * 4 Bytes
-        .size = 6 * 3 * 4,
+        // Vertices * 3 Coordinates * 4 Bytes
+        .size = MESH_BYTES,
     }) orelse return GameError.SdlError;
     errdefer sdl.ReleaseGPUBuffer(device, vertex_buffer);
 
     const transfer_buffer = sdl.CreateGPUTransferBuffer(device, &.{
-        .size = 6 * 3 * 4,
+        .size = MESH_BYTES,
         .usage = sdl.GPU_TRANSFERBUFFERUSAGE_UPLOAD,
     }) orelse return GameError.SdlError;
     defer sdl.ReleaseGPUTransferBuffer(device, transfer_buffer);
@@ -82,16 +111,7 @@ pub fn create() GameError!Self {
     { // Filling up transfer buffer
         const mapped_buffer: [*c]f32 = @alignCast(@ptrCast(sdl.MapGPUTransferBuffer(device, transfer_buffer, false) orelse return GameError.SdlError));
         defer sdl.UnmapGPUTransferBuffer(device, transfer_buffer);
-        std.mem.copyForwards(f32, mapped_buffer[0 .. 6 * 3], &[6 * 3]f32{
-            // Triangle 1
-            -1.0, 0.0,  0.0,
-            0.0,  1.0,  0.0,
-            1.0,  -1.0, 1.0,
-            // Triangle 2
-            1.0,  0.0,  0.0,
-            0.0,  -1.0, 0.0,
-            -1.0, 1.0,  1.0,
-        });
+        std.mem.copyForwards(f32, mapped_buffer[0..MESH.len], &MESH);
     }
 
     { // Copying data over from transfer buffer to vertex buffer
@@ -99,7 +119,7 @@ pub fn create() GameError!Self {
         const copy_pass = sdl.BeginGPUCopyPass(command_buffer) orelse return GameError.SdlError;
 
         sdl.UploadToGPUBuffer(copy_pass, &.{ .transfer_buffer = transfer_buffer }, &.{
-            .size = 6 * 3 * 4,
+            .size = MESH_BYTES,
             .buffer = vertex_buffer,
         }, false);
 
@@ -141,33 +161,16 @@ pub fn create() GameError!Self {
             .num_vertex_attributes = 1,
         },
         .primitive_type = sdl.GPU_PRIMITIVETYPE_TRIANGLELIST,
-        .rasterizer_state = .{
-            .cull_mode = sdl.GPU_CULLMODE_BACK,
-            .fill_mode = sdl.GPU_FILLMODE_FILL,
-            .front_face = sdl.GPU_FRONTFACE_CLOCKWISE,
-        },
+        .rasterizer_state = presets.RASTERIZER_CULL,
         .multisample_state = .{
             .sample_count = sdl.GPU_SAMPLECOUNT_4,
         },
-        .depth_stencil_state = .{
-            .compare_op = sdl.GPU_COMPAREOP_LESS,
-            .enable_depth_test = true,
-            .enable_depth_write = true,
-        },
+        .depth_stencil_state = presets.DEPTH_ENABLED,
         .target_info = .{
             .depth_stencil_format = sdl.GPU_TEXTUREFORMAT_D16_UNORM,
             .color_target_descriptions = &sdl.GPUColorTargetDescription{
                 .format = target_format,
-                .blend_state = .{
-                    .enable_blend = true,
-                    .alpha_blend_op = sdl.GPU_BLENDOP_ADD,
-                    .color_blend_op = sdl.GPU_BLENDOP_ADD,
-                    .color_write_mask = sdl.GPU_COLORCOMPONENT_R | sdl.GPU_COLORCOMPONENT_G | sdl.GPU_COLORCOMPONENT_B | sdl.GPU_COLORCOMPONENT_A,
-                    .src_alpha_blendfactor = sdl.GPU_BLENDFACTOR_ONE,
-                    .src_color_blendfactor = sdl.GPU_BLENDFACTOR_SRC_ALPHA,
-                    .dst_alpha_blendfactor = sdl.GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-                    .dst_color_blendfactor = sdl.GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-                },
+                .blend_state = presets.BLEND_NORMAL,
             },
             .num_color_targets = 1,
             .has_depth_stencil_target = true,
@@ -245,7 +248,18 @@ pub fn drawDebug(self: *Self) GameError!void {
 
     sdl.BindGPUGraphicsPipeline(render_pass, self.pipeline);
     sdl.BindGPUVertexBuffers(render_pass, 0, &.{ .offset = 0, .buffer = self.vertex_buffer }, 1);
-    sdl.DrawGPUPrimitives(render_pass, 6, 1, 0, 0);
+    const transform = Transform{};
+    const camera = Camera{
+        .transform = Transform{
+            .position = .{ 0.0, 0.0, -1.0 },
+        },
+        .near = 1.0,
+        .far = 1024.0,
+        .lens = .{ 0.25 * 16.0 / 9.0, 0.25 },
+    };
+    sdl.PushGPUVertexUniformData(self.command_buffer, 0, &camera.matrix(), 16 * 4);
+    sdl.PushGPUVertexUniformData(self.command_buffer, 1, &transform.matrix(), 16 * 4);
+    sdl.DrawGPUPrimitives(render_pass, MESH_VERTS, 1, 0, 0);
 
     sdl.EndGPURenderPass(render_pass);
 }
@@ -255,20 +269,17 @@ pub fn endDraw(self: *Self) GameError!void {
     if (!sdl.SubmitGPUCommandBuffer(self.command_buffer)) return GameError.SdlError;
 }
 
-fn loadShader(device: *sdl.GPUDevice, path: []const u8, stage: c_uint) GameError!*sdl.GPUShader {
+fn loadShader(device: *sdl.GPUDevice, path: []const u8, info: sdl.GPUShaderCreateInfo) GameError!*sdl.GPUShader {
     const file = std.fs.cwd().openFile(path, .{}) catch return GameError.OSError;
     defer file.close();
 
     const code = file.readToEndAllocOptions(std.heap.c_allocator, 1024 * 1024 * 1024, null, @alignOf(u8), 0) catch return GameError.OSError;
     defer std.heap.c_allocator.free(code);
 
-    return sdl.CreateGPUShader(device, &.{
-        .code = code,
-        .code_size = code.len,
-        .entrypoint = "main",
-        .format = sdl.GPU_SHADERFORMAT_SPIRV,
-        .stage = stage,
-    }) orelse return GameError.SdlError;
+    var updated_info = info;
+    updated_info.code = code;
+    updated_info.code_size = code.len;
+    return sdl.CreateGPUShader(device, &updated_info) orelse return GameError.SdlError;
 }
 
 fn createDepthTexture(device: *sdl.GPUDevice, width: u32, height: u32) GameError!*sdl.GPUTexture {
