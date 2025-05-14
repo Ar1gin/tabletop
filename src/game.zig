@@ -80,8 +80,19 @@ fn processEvents(graphics: *Graphics, run_info: *RunInfo) GameError!void {
                     run_info.running = false;
                 },
                 sdl.EVENT_WINDOW_RESIZED => {
-                    if (event.window.windowID != sdl.GetWindowID(graphics.window)) return;
+                    if (event.window.windowID != sdl.GetWindowID(graphics.window)) continue;
                     graphics.resize(@intCast(event.window.data1), @intCast(event.window.data2));
+                },
+                sdl.EVENT_MOUSE_MOTION => {
+                    if (event.motion.windowID != sdl.GetWindowID(graphics.window)) continue;
+                    if (@abs(event.motion.xrel) < 0.01 and @abs(event.motion.yrel) < 0.01) continue;
+                    const Transform = @import("graphics/transform.zig");
+                    const delta, const length = Transform.extractNormal(.{ -event.motion.yrel, -event.motion.xrel, 0.0 });
+                    const rot = Transform.rotationByAxis(
+                        delta,
+                        length * std.math.pi / @as(f32, @floatFromInt(graphics.window_size[1])) * 2.0,
+                    );
+                    graphics.mesh_transform.rotate(rot);
                 },
                 else => {},
             }

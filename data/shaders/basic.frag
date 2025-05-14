@@ -7,8 +7,8 @@ layout(location = 0) out vec4 fragColor;
 void main() {
     fragColor = vec4(
         depth,
-        0.0,
-        0.0,
+        cos(vertexIndex * 0.5) * 0.25 + 0.75,
+        sin(vertexIndex * 0.5) * 0.25 + 0.75,
         1.0
     );
 }

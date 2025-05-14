@@ -19,23 +19,52 @@ depth_texture: *sdl.GPUTexture,
 msaa_resolve: *sdl.GPUTexture,
 pipeline: *sdl.GPUGraphicsPipeline,
 
-to_resize: ?struct { u32, u32 } = null,
+window_size: [2]u32,
+
+camera: Camera,
+mesh_transform: Transform,
+
+to_resize: ?[2]u32 = null,
 
 const MESH_BYTES = MESH.len * 4;
 const MESH_VERTS = @divExact(MESH.len, 3);
 const MESH = [_]f32{
-    -1, 0,  4,
-    0,  1,  4,
-    1,  -1, 6,
-    1,  0,  4,
-    0,  -1, 4,
-    -1, 1,  6,
-    -1, 1,  6,
-    1,  1,  6,
-    -1, -1, 6,
-    1,  -1, 6,
-    -1, -1, 6,
-    1,  1,  6,
+    -1, 1,  -1,
+    1,  1,  -1,
+    -1, -1, -1,
+    1,  -1, -1,
+    -1, -1, -1,
+    1,  1,  -1,
+    1,  1,  -1,
+    1,  1,  1,
+    1,  -1, -1,
+    1,  -1, 1,
+    1,  -1, -1,
+    1,  1,  1,
+    1,  1,  1,
+    -1, 1,  1,
+    1,  -1, 1,
+    -1, -1, 1,
+    1,  -1, 1,
+    -1, 1,  1,
+    -1, 1,  1,
+    -1, 1,  -1,
+    -1, -1, 1,
+    -1, -1, -1,
+    -1, -1, 1,
+    -1, 1,  -1,
+    -1, 1,  1,
+    1,  1,  1,
+    -1, 1,  -1,
+    1,  1,  -1,
+    -1, 1,  -1,
+    1,  1,  1,
+    -1, -1, -1,
+    1,  -1, -1,
+    -1, -1, 1,
+    1,  -1, 1,
+    -1, -1, 1,
+    1,  -1, -1,
 };
 
 const Self = @This();
@@ -189,6 +218,16 @@ pub fn create() GameError!Self {
         .depth_texture = depth_texture,
         .msaa_resolve = msaa_resolve,
         .pipeline = pipeline,
+        .window_size = .{ 1600, 900 },
+        .camera = Camera{
+            .transform = Transform{
+                .position = .{ 0.0, 0.0, -6.0 },
+            },
+            .near = 1.0,
+            .far = 1024.0,
+            .lens = .{ 0.5 * 16.0 / 9.0, 0.5 },
+        },
+        .mesh_transform = Transform{},
     };
 }
 
@@ -216,6 +255,8 @@ pub fn beginDraw(self: *Self) GameError!void {
     self.command_buffer = sdl.AcquireGPUCommandBuffer(self.device) orelse return GameError.SdlError;
     if (self.to_resize) |new_size| {
         try self.resetTextures(new_size[0], new_size[1]);
+        self.camera.lens[0] = self.camera.lens[1] * @as(f32, @floatFromInt(new_size[0])) / @as(f32, @floatFromInt(new_size[1]));
+        self.window_size = new_size;
         self.to_resize = null;
     }
 }
@@ -229,7 +270,7 @@ pub fn drawDebug(self: *Self) GameError!void {
     if (render_target == null) return;
 
     const render_pass = sdl.BeginGPURenderPass(self.command_buffer, &.{
-        .clear_color = .{ .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 },
+        .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
         .cycle = false,
         .load_op = sdl.GPU_LOADOP_CLEAR,
         .store_op = sdl.GPU_STOREOP_RESOLVE,
@@ -248,17 +289,8 @@ pub fn drawDebug(self: *Self) GameError!void {
 
     sdl.BindGPUGraphicsPipeline(render_pass, self.pipeline);
     sdl.BindGPUVertexBuffers(render_pass, 0, &.{ .offset = 0, .buffer = self.vertex_buffer }, 1);
-    const transform = Transform{};
-    const camera = Camera{
-        .transform = Transform{
-            .position = .{ 0.0, 0.0, -1.0 },
-        },
-        .near = 1.0,
-        .far = 1024.0,
-        .lens = .{ 0.25 * 16.0 / 9.0, 0.25 },
-    };
-    sdl.PushGPUVertexUniformData(self.command_buffer, 0, &camera.matrix(), 16 * 4);
-    sdl.PushGPUVertexUniformData(self.command_buffer, 1, &transform.matrix(), 16 * 4);
+    sdl.PushGPUVertexUniformData(self.command_buffer, 0, &self.camera.matrix(), 16 * 4);
+    sdl.PushGPUVertexUniformData(self.command_buffer, 1, &self.mesh_transform.matrix(), 16 * 4);
     sdl.DrawGPUPrimitives(render_pass, MESH_VERTS, 1, 0, 0);
 
     sdl.EndGPURenderPass(render_pass);
