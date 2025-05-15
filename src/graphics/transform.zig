@@ -62,7 +62,7 @@ pub fn rotationByAxis(axis: Position, rotation: f32) Rotation {
 pub fn extractNormal(vector: Position) struct { Position, f32 } {
     @setFloatMode(.optimized);
 
-    const length = vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+    const length = @sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
     return .{ vector / @as(Position, @splat(length)), length };
 }
 
