@@ -20,5 +20,5 @@ pub fn matrix(camera: Camera) @Vector(16, f32) {
         0,  0,  zz, wz,
         0,  0,  1,  0,
     };
-    return Transform.multiplyMatrix(projection, camera.transform.inverse());
+    return Transform.multiplyMatrix(projection, camera.transform.inverseMatrix());
 }

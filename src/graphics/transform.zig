@@ -1,8 +1,6 @@
 const std = @import("std");
 const Transform = @This();
 
-// TODO: Scale
-
 pub const TMatrix = @Vector(16, f32);
 
 pub const Position = @Vector(3, f32);
@@ -14,29 +12,54 @@ rotation: Rotation = .{ 1.0, 0.0, 0.0, 0.0 },
 scale: Scale = @splat(1.0),
 
 pub fn matrix(transform: Transform) TMatrix {
+    @setFloatMode(.optimized);
     const r = rotationMatrix(transform.rotation);
+    const sx, const sy, const sz = transform.scale;
     return .{
-        r[0], r[1], r[2], transform.position[0],
-        r[3], r[4], r[5], transform.position[1],
-        r[6], r[7], r[8], transform.position[2],
-        0.0,  0.0,  0.0,  1.0,
+        sx * r[0], sy * r[1], sz * r[2], transform.position[0],
+        sx * r[3], sy * r[4], sz * r[5], transform.position[1],
+        sx * r[6], sy * r[7], sz * r[8], transform.position[2],
+        0.0,       0.0,       0.0,       1.0,
     };
 }
 
-pub fn inverse(transform: Transform) TMatrix {
-    // TODO: Could we just translate, rotate and scale back instead of relying on matrix math?
-    return invertMatrix(transform.matrix());
+pub fn inverseMatrix(transform: Transform) TMatrix {
+    @setFloatMode(.optimized);
+    const r = rotationMatrix(flipRotation(transform.rotation));
+    const tx, const ty, const tz = transform.position;
+    const sx = 1.0 / transform.scale[0];
+    const sy = 1.0 / transform.scale[1];
+    const sz = 1.0 / transform.scale[2];
+    const r0 = r[0] * sx;
+    const r1 = r[1] * sx;
+    const r2 = r[2] * sx;
+    const r3 = r[3] * sy;
+    const r4 = r[4] * sy;
+    const r5 = r[5] * sy;
+    const r6 = r[6] * sz;
+    const r7 = r[7] * sz;
+    const r8 = r[8] * sz;
+    return .{
+        r0,  r1,  r2,  -(r0 * tx + r1 * ty + r2 * tz),
+        r3,  r4,  r5,  -(r3 * tx + r4 * ty + r5 * tz),
+        r6,  r7,  r8,  -(r6 * tx + r7 * ty + r8 * tz),
+        0.0, 0.0, 0.0, 1.0,
+    };
 }
 
 pub fn rotate(transform: *Transform, rotation: Rotation) void {
     transform.rotation = normalizeRotation(combineRotations(transform.rotation, rotation));
 }
 
+pub fn rotateLocal(transform: *Transform, rotation: Rotation) void {
+    transform.rotation = normalizeRotation(combineRotations(rotation, transform.rotation));
+}
+
 pub fn normalizeRotation(r: Rotation) Rotation {
     @setFloatMode(.optimized);
 
-    const length = @sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]);
-    return r / @as(Rotation, @splat(length));
+    const length_inverse = 1.0 / @sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]);
+    return r * @as(Rotation, @splat(length_inverse));
 }
 
 pub fn combineRotations(a: Rotation, b: Rotation) Rotation {
@@ -57,6 +80,15 @@ pub fn rotationByAxis(axis: Position, rotation: f32) Rotation {
     const sin = std.math.sin(rotation * 0.5);
 
     return .{ cos, sin * axis[0], sin * axis[1], sin * axis[2] };
+}
+
+pub fn flipRotation(rotation: Rotation) Rotation {
+    return .{
+        rotation[0],
+        -rotation[1],
+        -rotation[2],
+        -rotation[3],
+    };
 }
 
 pub fn extractNormal(vector: Position) struct { Position, f32 } {
@@ -94,25 +126,6 @@ fn rotationMatrix(quaternion: Rotation) @Vector(9, f32) {
         bc + ad,     1 - bb - dd, cd - ab,
         bd - ac,     cd + ab,     1 - bb - cc,
     };
-}
-
-fn invertMatrix(a: TMatrix) TMatrix {
-    @setFloatMode(.optimized);
-
-    const MOD: f32 = 1.0 / 16.0;
-    const ID = TMatrix{
-        1, 0, 0, 0,
-        0, 1, 0, 0,
-        0, 0, 1, 0,
-        0, 0, 0, 1,
-    };
-    var p = ID - @as(TMatrix, @splat(MOD)) * a;
-    var output = ID + p;
-    inline for (0..8) |_| {
-        p = multiplyMatrix(p, p);
-        output = multiplyMatrix(output, ID + p);
-    }
-    return output * @as(TMatrix, @splat(MOD));
 }
 
 pub fn multiplyMatrix(a: TMatrix, b: TMatrix) TMatrix {

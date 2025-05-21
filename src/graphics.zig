@@ -227,7 +227,9 @@ pub fn create() GameError!Self {
             .far = 1024.0,
             .lens = .{ 0.5 * 16.0 / 9.0, 0.5 },
         },
-        .mesh_transform = Transform{},
+        .mesh_transform = Transform{
+            .scale = .{ 1.0, 1.5, 2.0 },
+        },
     };
 }
 
