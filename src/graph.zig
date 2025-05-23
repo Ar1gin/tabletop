@@ -149,7 +149,10 @@ pub fn runAllSystems(self: *Self) GraphError!void {
         const next_system = self.system_queue.pop().?;
 
         defer next_system.deinit(self.alloc);
-        try self.runSystem(next_system);
+        self.runSystem(next_system) catch |err| {
+            std.debug.print("System run error: {} while running {s}\n", .{ err, next_system.label });
+            return err;
+        };
     }
 }
 

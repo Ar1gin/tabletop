@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sdl = @import("sdl");
+
+const debug_scene = @import("debug_scene.zig");
 const Graph = @import("graph.zig");
 const Graphics = @import("graphics.zig");
 
@@ -8,6 +10,7 @@ const Graphics = @import("graphics.zig");
 // - Do something about deallocating `Resource`s when `Graph` fails
 
 const RunInfo = struct { running: bool };
+pub const Mouse = struct { x: f32, y: f32, dx: f32, dy: f32 };
 
 alloc: std.mem.Allocator,
 graph: Graph,
@@ -21,7 +24,17 @@ pub fn init(alloc: std.mem.Allocator) GameError!Self {
 
     var controller = try graph.getController();
     controller.addResource(graphics);
+    controller.addResource(Mouse{
+        .x = 0.0,
+        .y = 0.0,
+        .dx = 0.0,
+        .dy = 0.0,
+    });
+    controller.queue(debug_scene.init);
     try graph.freeController(controller);
+
+    defer graph.reset();
+    try graph.runAllSystems();
 
     return Self{
         .alloc = alloc,
@@ -44,7 +57,9 @@ pub fn run(self: *Self) GameError!void {
         var controller = try self.graph.getController();
         controller.queue(.{
             .events = processEvents,
-            .draw = draw,
+            .update = debug_scene.update,
+            .begin_draw = beginDraw,
+            .end_draw = endDraw,
             .ordered = true,
         });
         try self.graph.freeController(controller);
@@ -54,12 +69,13 @@ pub fn run(self: *Self) GameError!void {
     }
 }
 
-fn draw(graphics: *Graphics) GameError!void {
-    try graphics.beginDraw();
-    {
-        errdefer graphics.endDraw() catch {};
-        try graphics.drawDebug();
+fn beginDraw(graphics: *Graphics, controller: *Graph.Controller) GameError!void {
+    if (try graphics.beginDraw()) {
+        controller.queue(debug_scene.draw);
     }
+}
+
+fn endDraw(graphics: *Graphics) GameError!void {
     try graphics.endDraw();
 }
 
@@ -68,7 +84,10 @@ fn clean(graphics: *Graphics) !void {
     // TODO: Also remove the resource
 }
 
-fn processEvents(graphics: *Graphics, run_info: *RunInfo) GameError!void {
+fn processEvents(graphics: *Graphics, run_info: *RunInfo, mouse: *Mouse) GameError!void {
+    mouse.dx = 0.0;
+    mouse.dy = 0.0;
+
     sdl.PumpEvents();
     while (true) {
         var buffer: [16]sdl.Event = undefined;
@@ -85,14 +104,10 @@ fn processEvents(graphics: *Graphics, run_info: *RunInfo) GameError!void {
                 },
                 sdl.EVENT_MOUSE_MOTION => {
                     if (event.motion.windowID != sdl.GetWindowID(graphics.window)) continue;
-                    if (@abs(event.motion.xrel) < 0.01 and @abs(event.motion.yrel) < 0.01) continue;
-                    const Transform = @import("graphics/transform.zig");
-                    const delta, const length = Transform.extractNormal(.{ -event.motion.yrel, -event.motion.xrel, 0.0 });
-                    const rot = Transform.rotationByAxis(
-                        delta,
-                        length * std.math.pi / @as(f32, @floatFromInt(graphics.window_size[1])) * 2.0,
-                    );
-                    graphics.mesh_transform.rotate(rot);
+                    mouse.x = event.motion.x;
+                    mouse.y = event.motion.y;
+                    mouse.dx += event.motion.xrel;
+                    mouse.dy += event.motion.yrel;
                 },
                 else => {},
             }
@@ -106,7 +121,11 @@ fn processEvents(graphics: *Graphics, run_info: *RunInfo) GameError!void {
 
 pub fn deinit(self: *Self) void {
     var controller = self.graph.getController() catch unreachable;
-    controller.queue(clean);
+    controller.queue(.{
+        .deinit = debug_scene.deinit,
+        .clean = clean,
+        .ordered = true,
+    });
     self.graph.freeController(controller) catch unreachable;
     self.graph.runAllSystems() catch unreachable;
 

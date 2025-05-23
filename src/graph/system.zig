@@ -6,6 +6,7 @@ function_runner: *const fn ([]const *anyopaque) void,
 requested_types: []const Request,
 requires_dud: ?Dud.Id,
 submit_dud: ?Dud.Id,
+label: []const u8,
 
 pub const Dud = struct {
     pub const Id = usize;
@@ -37,6 +38,7 @@ pub fn fromFunction(comptime function: anytype, alloc: std.mem.Allocator) !Self 
         .function_runner = utils.generateRunner(function),
         .requires_dud = null,
         .submit_dud = null,
+        .label = @typeName(@TypeOf(function)),
     };
 }
 

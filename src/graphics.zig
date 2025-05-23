@@ -1,20 +1,33 @@
 const std = @import("std");
 const sdl = @import("sdl");
 const presets = @import("graphics/presets.zig");
-const Transform = @import("graphics/transform.zig");
-const Camera = @import("graphics/camera.zig");
 const GameError = @import("game.zig").GameError;
+
+pub const Transform = @import("graphics/transform.zig");
+pub const Camera = @import("graphics/camera.zig");
+
+pub const Mesh = struct {
+    vertex_start: usize,
+    vertex_count: usize,
+};
 
 window: *sdl.Window,
 renderer: *sdl.Renderer,
 device: *sdl.GPUDevice,
 /// Only available while drawing
 command_buffer: ?*sdl.GPUCommandBuffer,
+render_pass: ?*sdl.GPURenderPass,
 
 shader_vert: *sdl.GPUShader,
 shader_frag: *sdl.GPUShader,
 
 vertex_buffer: *sdl.GPUBuffer,
+vertex_buffer_capacity: usize,
+vertex_buffer_used: usize,
+
+transfer_buffer: *sdl.GPUTransferBuffer,
+transfer_buffer_capacity: usize,
+
 depth_texture: *sdl.GPUTexture,
 msaa_resolve: *sdl.GPUTexture,
 pipeline: *sdl.GPUGraphicsPipeline,
@@ -22,50 +35,13 @@ pipeline: *sdl.GPUGraphicsPipeline,
 window_size: [2]u32,
 
 camera: Camera,
-mesh_transform: Transform,
 
 to_resize: ?[2]u32 = null,
 
-const MESH_BYTES = MESH.len * 4;
-const MESH_VERTS = @divExact(MESH.len, 3);
-const MESH = [_]f32{
-    -1, 1,  -1,
-    1,  1,  -1,
-    -1, -1, -1,
-    1,  -1, -1,
-    -1, -1, -1,
-    1,  1,  -1,
-    1,  1,  -1,
-    1,  1,  1,
-    1,  -1, -1,
-    1,  -1, 1,
-    1,  -1, -1,
-    1,  1,  1,
-    1,  1,  1,
-    -1, 1,  1,
-    1,  -1, 1,
-    -1, -1, 1,
-    1,  -1, 1,
-    -1, 1,  1,
-    -1, 1,  1,
-    -1, 1,  -1,
-    -1, -1, 1,
-    -1, -1, -1,
-    -1, -1, 1,
-    -1, 1,  -1,
-    -1, 1,  1,
-    1,  1,  1,
-    -1, 1,  -1,
-    1,  1,  -1,
-    -1, 1,  -1,
-    1,  1,  1,
-    -1, -1, -1,
-    1,  -1, -1,
-    -1, -1, 1,
-    1,  -1, 1,
-    -1, -1, 1,
-    1,  -1, -1,
-};
+const VERTEX_BUFFER_DEFAULT_CAPACITY = 1024;
+const VERTEX_BUFFER_GROWTH_MULTIPLIER = 2;
+const TRANSFER_BUFFER_DEFAULT_CAPACITY = 1024;
+const BYTES_PER_VERTEX = 3 * 4;
 
 const Self = @This();
 pub fn create() GameError!Self {
@@ -126,35 +102,15 @@ pub fn create() GameError!Self {
 
     const vertex_buffer = sdl.CreateGPUBuffer(device, &.{
         .usage = sdl.GPU_BUFFERUSAGE_VERTEX,
-        // Vertices * 3 Coordinates * 4 Bytes
-        .size = MESH_BYTES,
+        .size = VERTEX_BUFFER_DEFAULT_CAPACITY,
     }) orelse return GameError.SdlError;
     errdefer sdl.ReleaseGPUBuffer(device, vertex_buffer);
 
     const transfer_buffer = sdl.CreateGPUTransferBuffer(device, &.{
-        .size = MESH_BYTES,
-        .usage = sdl.GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+        .size = TRANSFER_BUFFER_DEFAULT_CAPACITY,
+        .usage = sdl.GPU_TRANSFERBUFFERUSAGE_UPLOAD | sdl.GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
     }) orelse return GameError.SdlError;
-    defer sdl.ReleaseGPUTransferBuffer(device, transfer_buffer);
-
-    { // Filling up transfer buffer
-        const mapped_buffer: [*c]f32 = @alignCast(@ptrCast(sdl.MapGPUTransferBuffer(device, transfer_buffer, false) orelse return GameError.SdlError));
-        defer sdl.UnmapGPUTransferBuffer(device, transfer_buffer);
-        std.mem.copyForwards(f32, mapped_buffer[0..MESH.len], &MESH);
-    }
-
-    { // Copying data over from transfer buffer to vertex buffer
-        const command_buffer = sdl.AcquireGPUCommandBuffer(device) orelse return GameError.SdlError;
-        const copy_pass = sdl.BeginGPUCopyPass(command_buffer) orelse return GameError.SdlError;
-
-        sdl.UploadToGPUBuffer(copy_pass, &.{ .transfer_buffer = transfer_buffer }, &.{
-            .size = MESH_BYTES,
-            .buffer = vertex_buffer,
-        }, false);
-
-        sdl.EndGPUCopyPass(copy_pass);
-        if (!sdl.SubmitGPUCommandBuffer(command_buffer)) return GameError.SdlError;
-    }
+    errdefer sdl.ReleaseGPUTransferBuffer(device, transfer_buffer);
 
     const target_format = sdl.GetGPUSwapchainTextureFormat(device, window);
     if (target_format == sdl.GPU_TEXTUREFORMAT_INVALID) return GameError.SdlError;
@@ -211,24 +167,33 @@ pub fn create() GameError!Self {
         .window = window.?,
         .renderer = renderer.?,
         .device = device,
+
         .command_buffer = null,
+        .render_pass = null,
+
         .shader_vert = shader_vert,
         .shader_frag = shader_frag,
+
         .vertex_buffer = vertex_buffer,
+        .vertex_buffer_capacity = VERTEX_BUFFER_DEFAULT_CAPACITY,
+        .vertex_buffer_used = 0,
+
+        .transfer_buffer = transfer_buffer,
+        .transfer_buffer_capacity = TRANSFER_BUFFER_DEFAULT_CAPACITY,
+
         .depth_texture = depth_texture,
         .msaa_resolve = msaa_resolve,
         .pipeline = pipeline,
+
         .window_size = .{ 1600, 900 },
+
         .camera = Camera{
             .transform = Transform{
-                .position = .{ 0.0, 0.0, -6.0 },
+                .position = .{ 0.0, 0.0, -4.0 },
             },
             .near = 1.0,
             .far = 1024.0,
-            .lens = .{ 0.5 * 16.0 / 9.0, 0.5 },
-        },
-        .mesh_transform = Transform{
-            .scale = .{ 1.0, 1.5, 2.0 },
+            .lens = .{ 1.5 * 16.0 / 9.0, 1.5 },
         },
     };
 }
@@ -242,6 +207,7 @@ pub fn destroy(self: *Self) void {
     sdl.ReleaseGPUTexture(self.device, self.msaa_resolve);
     sdl.ReleaseGPUTexture(self.device, self.depth_texture);
     sdl.ReleaseGPUBuffer(self.device, self.vertex_buffer);
+    sdl.ReleaseGPUTransferBuffer(self.device, self.transfer_buffer);
 
     sdl.ReleaseGPUShader(self.device, self.shader_vert);
     sdl.ReleaseGPUShader(self.device, self.shader_frag);
@@ -253,7 +219,107 @@ pub fn destroy(self: *Self) void {
     sdl.DestroyGPUDevice(self.device);
 }
 
-pub fn beginDraw(self: *Self) GameError!void {
+pub fn loadMesh(self: *Self, mesh_bytes: []const u8) GameError!Mesh {
+    std.debug.assert(mesh_bytes.len < self.transfer_buffer_capacity);
+
+    var size_mult: usize = 1;
+    while (self.vertex_buffer_used + mesh_bytes.len > self.vertex_buffer_capacity) {
+        size_mult *= VERTEX_BUFFER_GROWTH_MULTIPLIER;
+    }
+    if (size_mult > 1) {
+        try self.growVertexBuffer(self.vertex_buffer_capacity * size_mult);
+    }
+
+    const map = sdl.MapGPUTransferBuffer(self.device, self.transfer_buffer, false) orelse return GameError.SdlError;
+    @memcpy(@as([*]u8, @ptrCast(map)), mesh_bytes);
+    sdl.UnmapGPUTransferBuffer(self.device, self.transfer_buffer);
+
+    const command_buffer = sdl.AcquireGPUCommandBuffer(self.device) orelse return GameError.SdlError;
+    const fence = blk: {
+        errdefer _ = sdl.CancelGPUCommandBuffer(command_buffer);
+
+        const copy_pass = sdl.BeginGPUCopyPass(command_buffer) orelse return GameError.SdlError;
+        sdl.UploadToGPUBuffer(copy_pass, &.{
+            .transfer_buffer = self.transfer_buffer,
+            .offset = 0,
+        }, &.{
+            .buffer = self.vertex_buffer,
+            .offset = @intCast(self.vertex_buffer_used),
+            .size = @intCast(mesh_bytes.len),
+        }, false);
+        sdl.EndGPUCopyPass(copy_pass);
+
+        break :blk sdl.SubmitGPUCommandBufferAndAcquireFence(command_buffer) orelse return GameError.SdlError;
+    };
+    defer sdl.ReleaseGPUFence(self.device, fence);
+
+    if (!sdl.WaitForGPUFences(self.device, true, &fence, 1)) return GameError.SdlError;
+
+    const vertex_start = self.vertex_buffer_used;
+    self.vertex_buffer_used += mesh_bytes.len;
+
+    return Mesh{
+        .vertex_start = vertex_start / BYTES_PER_VERTEX,
+        .vertex_count = mesh_bytes.len / BYTES_PER_VERTEX,
+    };
+}
+
+pub fn unloadMesh(self: *Self, mesh: Mesh) void {
+    // TODO: free some memory
+    _ = self;
+    _ = &mesh;
+}
+
+fn growVertexBuffer(self: *Self, new_size: usize) GameError!void {
+    const new_buffer = sdl.CreateGPUBuffer(self.device, &.{
+        .size = @intCast(new_size),
+        .usage = sdl.GPU_BUFFERUSAGE_VERTEX,
+    }) orelse return GameError.SdlError;
+    errdefer sdl.ReleaseGPUBuffer(self.device, new_buffer);
+
+    const command_buffer = sdl.AcquireGPUCommandBuffer(self.device) orelse return GameError.SdlError;
+
+    const fence = blk: {
+        errdefer _ = sdl.CancelGPUCommandBuffer(command_buffer);
+
+        const copy_pass = sdl.BeginGPUCopyPass(command_buffer);
+        var copied: usize = 0;
+        while (copied < self.vertex_buffer_used) {
+            const to_transer = @min(self.vertex_buffer_used - copied, self.transfer_buffer_capacity);
+            sdl.DownloadFromGPUBuffer(copy_pass, &.{
+                .buffer = self.vertex_buffer,
+                .offset = @intCast(copied),
+                .size = @intCast(to_transer),
+            }, &.{
+                .transfer_buffer = self.transfer_buffer,
+                .offset = 0,
+            });
+            sdl.UploadToGPUBuffer(copy_pass, &.{
+                .transfer_buffer = self.transfer_buffer,
+                .offset = 0,
+            }, &.{
+                .buffer = new_buffer,
+                .offset = @intCast(copied),
+                .size = @intCast(to_transer),
+            }, false);
+            copied += to_transer;
+        }
+        sdl.EndGPUCopyPass(copy_pass);
+
+        break :blk sdl.SubmitGPUCommandBufferAndAcquireFence(command_buffer) orelse return GameError.SdlError;
+    };
+    defer sdl.ReleaseGPUFence(self.device, fence);
+
+    if (!sdl.WaitForGPUFences(self.device, true, &fence, 1)) return GameError.SdlError;
+
+    sdl.ReleaseGPUBuffer(self.device, self.vertex_buffer);
+    self.vertex_buffer = new_buffer;
+    self.vertex_buffer_capacity = new_size;
+}
+
+/// If window is minimized returns `false`, `render_pass` remains null
+/// Otherwise `command_buffer` and `render_pass` are both set
+pub fn beginDraw(self: *Self) GameError!bool {
     self.command_buffer = sdl.AcquireGPUCommandBuffer(self.device) orelse return GameError.SdlError;
     if (self.to_resize) |new_size| {
         try self.resetTextures(new_size[0], new_size[1]);
@@ -261,17 +327,15 @@ pub fn beginDraw(self: *Self) GameError!void {
         self.window_size = new_size;
         self.to_resize = null;
     }
-}
 
-pub fn drawDebug(self: *Self) GameError!void {
     var render_target: ?*sdl.GPUTexture = null;
     var width: u32 = 0;
     var height: u32 = 0;
     if (!sdl.WaitAndAcquireGPUSwapchainTexture(self.command_buffer, self.window, &render_target, &width, &height)) return GameError.SdlError;
     // Hidden
-    if (render_target == null) return;
+    if (render_target == null) return false;
 
-    const render_pass = sdl.BeginGPURenderPass(self.command_buffer, &.{
+    self.render_pass = sdl.BeginGPURenderPass(self.command_buffer, &.{
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
         .cycle = false,
         .load_op = sdl.GPU_LOADOP_CLEAR,
@@ -289,17 +353,26 @@ pub fn drawDebug(self: *Self) GameError!void {
         .texture = self.depth_texture,
     }) orelse return GameError.SdlError;
 
-    sdl.BindGPUGraphicsPipeline(render_pass, self.pipeline);
-    sdl.BindGPUVertexBuffers(render_pass, 0, &.{ .offset = 0, .buffer = self.vertex_buffer }, 1);
+    sdl.BindGPUGraphicsPipeline(self.render_pass, self.pipeline);
+    sdl.BindGPUVertexBuffers(self.render_pass, 0, &.{ .offset = 0, .buffer = self.vertex_buffer }, 1);
     sdl.PushGPUVertexUniformData(self.command_buffer, 0, &self.camera.matrix(), 16 * 4);
-    sdl.PushGPUVertexUniformData(self.command_buffer, 1, &self.mesh_transform.matrix(), 16 * 4);
-    sdl.DrawGPUPrimitives(render_pass, MESH_VERTS, 1, 0, 0);
 
-    sdl.EndGPURenderPass(render_pass);
+    return true;
+}
+
+pub fn drawMesh(self: *Self, mesh: Mesh, transform: Transform) GameError!void {
+    if (self.render_pass == null) return;
+
+    sdl.PushGPUVertexUniformData(self.command_buffer, 1, &transform.matrix(), 16 * 4);
+    sdl.DrawGPUPrimitives(self.render_pass, @intCast(mesh.vertex_count), 1, @intCast(mesh.vertex_start), 0);
 }
 
 pub fn endDraw(self: *Self) GameError!void {
     defer self.command_buffer = null;
+    defer self.render_pass = null;
+    if (self.render_pass) |render_pass| {
+        sdl.EndGPURenderPass(render_pass);
+    }
     if (!sdl.SubmitGPUCommandBuffer(self.command_buffer)) return GameError.SdlError;
 }
 
