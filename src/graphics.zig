@@ -189,7 +189,7 @@ pub fn create() GameError!Self {
 
         .camera = Camera{
             .transform = Transform{
-                .position = .{ 0.0, 0.0, -4.0 },
+                .position = .{ 0.0, 0.0, 4.0 },
             },
             .near = 1.0,
             .far = 1024.0,

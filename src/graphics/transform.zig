@@ -58,10 +58,16 @@ pub fn translate(transform: *Transform, translation: Position) void {
 pub fn translateLocal(transform: *Transform, translation: Position) void {
     @setFloatMode(.optimized);
 
-    const a = transform.rotation[0];
-    const b = transform.rotation[1];
-    const c = transform.rotation[2];
-    const d = transform.rotation[3];
+    transform.position += rotateVector(translation, transform.rotation);
+}
+
+pub fn rotateVector(vector: Position, rotation: Rotation) Position {
+    @setFloatMode(.optimized);
+
+    const a = rotation[0];
+    const b = rotation[1];
+    const c = rotation[2];
+    const d = rotation[3];
 
     const s = 2.0 / (a * a + b * b + c * c + d * d);
     const bs = b * s;
@@ -78,9 +84,11 @@ pub fn translateLocal(transform: *Transform, translation: Position) void {
     const cd = c * ds;
     const dd = d * ds;
 
-    transform.position[0] += translation[0] * (1 - cc - dd) + translation[1] * (bc - ad) + translation[2] * (bd + ac);
-    transform.position[1] += translation[0] * (bc + ad) + translation[1] * (1 - bb - dd) + translation[2] * (cd - ab);
-    transform.position[2] += translation[0] * (bd - ac) + translation[1] * (cd + ab) + translation[2] * (1 - bb - cc);
+    return .{
+        vector[0] * (1 - cc - dd) + vector[1] * (bc - ad) + vector[2] * (bd + ac),
+        vector[0] * (bc + ad) + vector[1] * (1 - bb - dd) + vector[2] * (cd - ab),
+        vector[0] * (bd - ac) + vector[1] * (cd + ab) + vector[2] * (1 - bb - cc),
+    };
 }
 
 pub fn rotate(transform: *Transform, rotation: Rotation) void {
@@ -95,11 +103,49 @@ pub fn rotateLocal(transform: *Transform, rotation: Rotation) void {
     transform.rotation = normalizeRotation(combineRotations(rotation, transform.rotation));
 }
 
+pub fn rotateByAxis(transform: *Transform, axis: Position, angle: f32) void {
+    transform.rotate(rotationByAxis(axis, angle));
+}
+
+pub fn rotateToward(transform: *Transform, target: Position, origin_norm: Position) void {
+    @setFloatMode(.optimized);
+
+    transform.rotation = rotationToward(origin_norm, target - transform.position, .{ .normalize_to = true });
+}
+
+const RotationTowardOptions = struct {
+    normalize_from: bool = false,
+    normalize_to: bool = false,
+};
+pub fn rotationToward(from: Position, to: Position, comptime options: RotationTowardOptions) Rotation {
+    @setFloatMode(.optimized);
+
+    const from_norm = if (options.normalize_from) extractNormal(from)[0] else from;
+    const to_norm = if (options.normalize_to) extractNormal(to)[0] else to;
+
+    const combined = combineRotations(.{
+        0.0, to_norm[0], to_norm[1], to_norm[2],
+    }, .{
+        0.0, from_norm[0], from_norm[1], from_norm[2],
+    });
+    return normalizeRotation(.{
+        1 - combined[0],
+        combined[1],
+        combined[2],
+        combined[3],
+    });
+}
+
 pub fn normalizeRotation(r: Rotation) Rotation {
     @setFloatMode(.optimized);
 
-    const length_inverse = 1.0 / @sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]);
-    return r * @as(Rotation, @splat(length_inverse));
+    const length = @sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]);
+    if (length <= 1e-15) {
+        return .{ 1.0, 0.0, 0.0, 0.0 };
+    } else {
+        const length_inverse = 1.0 / length;
+        return r * @as(Rotation, @splat(length_inverse));
+    }
 }
 
 pub fn combineRotations(a: Rotation, b: Rotation) Rotation {
@@ -113,11 +159,11 @@ pub fn combineRotations(a: Rotation, b: Rotation) Rotation {
     };
 }
 
-pub fn rotationByAxis(axis: Position, rotation: f32) Rotation {
+pub fn rotationByAxis(axis: Position, angle: f32) Rotation {
     @setFloatMode(.optimized);
 
-    const cos = std.math.cos(rotation * 0.5);
-    const sin = std.math.sin(rotation * 0.5);
+    const cos = std.math.cos(angle * 0.5);
+    const sin = std.math.sin(angle * 0.5);
 
     return .{ cos, sin * axis[0], sin * axis[1], sin * axis[2] };
 }

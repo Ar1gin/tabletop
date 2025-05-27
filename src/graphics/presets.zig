@@ -20,5 +20,10 @@ pub const DEPTH_ENABLED = sdl.GPUDepthStencilState{
 pub const RASTERIZER_CULL = sdl.GPURasterizerState{
     .cull_mode = sdl.GPU_CULLMODE_BACK,
     .fill_mode = sdl.GPU_FILLMODE_FILL,
-    .front_face = sdl.GPU_FRONTFACE_CLOCKWISE,
+    .front_face = sdl.GPU_FRONTFACE_COUNTER_CLOCKWISE,
+};
+
+pub const RASTERIZER_NO_CULL = sdl.GPURasterizerState{
+    .cull_mode = sdl.GPU_CULLMODE_NONE,
+    .fill_mode = sdl.GPU_FILLMODE_FILL,
 };

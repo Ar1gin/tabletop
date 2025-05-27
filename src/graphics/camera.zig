@@ -15,10 +15,10 @@ pub fn matrix(camera: Camera) @Vector(16, f32) {
     const zz = camera.far * fnmod;
     const wz = -camera.near * camera.far * fnmod;
     const projection = @Vector(16, f32){
-        xx, 0,  0,  0,
-        0,  yy, 0,  0,
-        0,  0,  zz, wz,
-        0,  0,  1,  0,
+        xx, 0,  0,   0,
+        0,  yy, 0,   0,
+        0,  0,  -zz, wz,
+        0,  0,  -1,  0,
     };
     return Transform.multiplyMatrix(projection, camera.transform.inverseMatrix());
 }

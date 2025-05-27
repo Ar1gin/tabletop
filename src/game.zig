@@ -27,6 +27,7 @@ pub fn init(alloc: std.mem.Allocator) GameError!Self {
     var controller = try graph.getController();
     controller.addResource(graphics);
     controller.addResource(Mouse{
+        .buttons = .{},
         .x = 0.0,
         .y = 0.0,
         .dx = 0.0,
@@ -106,7 +107,7 @@ fn processEvents(
 ) GameError!void {
     mouse.dx = 0.0;
     mouse.dy = 0.0;
-    keyboard.reset();
+    keyboard.keys.reset();
 
     sdl.PumpEvents();
     while (true) {
@@ -131,11 +132,19 @@ fn processEvents(
                 },
                 sdl.EVENT_KEY_DOWN => {
                     if (event.key.windowID != sdl.GetWindowID(graphics.window)) continue;
-                    keyboard.press(event.key.scancode);
+                    keyboard.keys.press(event.key.scancode);
                 },
                 sdl.EVENT_KEY_UP => {
                     if (event.key.windowID != sdl.GetWindowID(graphics.window)) continue;
-                    keyboard.release(event.key.scancode);
+                    keyboard.keys.release(event.key.scancode);
+                },
+                sdl.EVENT_MOUSE_BUTTON_DOWN => {
+                    if (event.button.windowID != sdl.GetWindowID(graphics.window)) continue;
+                    mouse.buttons.press(event.button.button);
+                },
+                sdl.EVENT_MOUSE_BUTTON_UP => {
+                    if (event.button.windowID != sdl.GetWindowID(graphics.window)) continue;
+                    mouse.buttons.release(event.button.button);
                 },
                 else => {},
             }
