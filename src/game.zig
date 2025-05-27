@@ -9,8 +9,10 @@ const Graphics = @import("graphics.zig");
 // TODO:
 // - Do something about deallocating `Resource`s when `Graph` fails
 
-const RunInfo = struct { running: bool };
-pub const Mouse = struct { x: f32, y: f32, dx: f32, dy: f32 };
+pub const RunInfo = struct { running: bool };
+pub const Mouse = @import("mouse.zig");
+pub const Keyboard = @import("keyboard.zig");
+pub const Time = @import("time.zig");
 
 alloc: std.mem.Allocator,
 graph: Graph,
@@ -29,6 +31,11 @@ pub fn init(alloc: std.mem.Allocator) GameError!Self {
         .y = 0.0,
         .dx = 0.0,
         .dy = 0.0,
+    });
+    controller.addResource(Keyboard{});
+    controller.addResource(Time{
+        .delta = 0.0,
+        .now = 0,
     });
     controller.queue(debug_scene.init);
     try graph.freeController(controller);
@@ -52,6 +59,13 @@ pub fn run(self: *Self) GameError!void {
     while (true) {
         if (!self.graph.getResource(RunInfo).?.running) {
             break;
+        }
+
+        var current_time: sdl.Time = undefined;
+        if (sdl.GetCurrentTime(&current_time)) {
+            const time = self.graph.getResource(Time).?;
+            time.delta = @as(f32, @floatFromInt(current_time - time.now)) * 0.000000001;
+            time.now = current_time;
         }
 
         var controller = try self.graph.getController();
@@ -84,9 +98,15 @@ fn clean(graphics: *Graphics) !void {
     // TODO: Also remove the resource
 }
 
-fn processEvents(graphics: *Graphics, run_info: *RunInfo, mouse: *Mouse) GameError!void {
+fn processEvents(
+    graphics: *Graphics,
+    run_info: *RunInfo,
+    mouse: *Mouse,
+    keyboard: *Keyboard,
+) GameError!void {
     mouse.dx = 0.0;
     mouse.dy = 0.0;
+    keyboard.reset();
 
     sdl.PumpEvents();
     while (true) {
@@ -108,6 +128,14 @@ fn processEvents(graphics: *Graphics, run_info: *RunInfo, mouse: *Mouse) GameErr
                     mouse.y = event.motion.y;
                     mouse.dx += event.motion.xrel;
                     mouse.dy += event.motion.yrel;
+                },
+                sdl.EVENT_KEY_DOWN => {
+                    if (event.key.windowID != sdl.GetWindowID(graphics.window)) continue;
+                    keyboard.press(event.key.scancode);
+                },
+                sdl.EVENT_KEY_UP => {
+                    if (event.key.windowID != sdl.GetWindowID(graphics.window)) continue;
+                    keyboard.release(event.key.scancode);
                 },
                 else => {},
             }

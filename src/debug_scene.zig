@@ -69,15 +69,33 @@ pub fn init(controller: *Controller, graphics: *Graphics) !void {
 
 pub fn deinit() void {}
 
-pub fn update(cube: *Cube, mouse: *Game.Mouse, graphics: *Graphics) void {
+pub fn update(
+    mouse: *Game.Mouse,
+    keyboard: *Game.Keyboard,
+    graphics: *Graphics,
+    time: *Game.Time,
+) void {
+    if (keyboard.is_pressed(sdl.SCANCODE_W)) {
+        graphics.camera.transform.translateLocal(.{ 0.0, 0.0, 5.0 * time.delta });
+    }
+    if (keyboard.is_pressed(sdl.SCANCODE_S)) {
+        graphics.camera.transform.translateLocal(.{ 0.0, 0.0, -5.0 * time.delta });
+    }
+    if (keyboard.is_pressed(sdl.SCANCODE_D)) {
+        graphics.camera.transform.translateLocal(.{ 5.0 * time.delta, 0.0, 0.0 });
+    }
+    if (keyboard.is_pressed(sdl.SCANCODE_A)) {
+        graphics.camera.transform.translateLocal(.{ -5.0 * time.delta, 0.0, 0.0 });
+    }
+
     if (@abs(mouse.dx) < 0.01 and @abs(mouse.dy) < 0.01) return;
 
-    const delta, const length = Graphics.Transform.extractNormal(.{ -mouse.dy, -mouse.dx, 0.0 });
+    const delta, const length = Graphics.Transform.extractNormal(.{ mouse.dy, mouse.dx, 0.0 });
     const rot = Graphics.Transform.rotationByAxis(
         delta,
         length * std.math.pi / @as(f32, @floatFromInt(graphics.window_size[1])) * 2.0,
     );
-    cube.transform.rotate(rot);
+    graphics.camera.transform.rotateLocal(rot);
 }
 
 pub fn draw(cube: *Cube, graphics: *Graphics) !void {

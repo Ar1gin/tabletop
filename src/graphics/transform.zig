@@ -13,6 +13,7 @@ scale: Scale = @splat(1.0),
 
 pub fn matrix(transform: Transform) TMatrix {
     @setFloatMode(.optimized);
+
     const r = rotationMatrix(transform.rotation);
     const sx, const sy, const sz = transform.scale;
     return .{
@@ -25,6 +26,7 @@ pub fn matrix(transform: Transform) TMatrix {
 
 pub fn inverseMatrix(transform: Transform) TMatrix {
     @setFloatMode(.optimized);
+
     const r = rotationMatrix(flipRotation(transform.rotation));
     const tx, const ty, const tz = transform.position;
     const sx = 1.0 / transform.scale[0];
@@ -47,11 +49,49 @@ pub fn inverseMatrix(transform: Transform) TMatrix {
     };
 }
 
+pub fn translate(transform: *Transform, translation: Position) void {
+    @setFloatMode(.optimized);
+
+    transform.position += translation;
+}
+
+pub fn translateLocal(transform: *Transform, translation: Position) void {
+    @setFloatMode(.optimized);
+
+    const a = transform.rotation[0];
+    const b = transform.rotation[1];
+    const c = transform.rotation[2];
+    const d = transform.rotation[3];
+
+    const s = 2.0 / (a * a + b * b + c * c + d * d);
+    const bs = b * s;
+    const cs = c * s;
+    const ds = d * s;
+
+    const ab = a * bs;
+    const ac = a * cs;
+    const ad = a * ds;
+    const bb = b * bs;
+    const bc = b * cs;
+    const bd = b * ds;
+    const cc = c * cs;
+    const cd = c * ds;
+    const dd = d * ds;
+
+    transform.position[0] += translation[0] * (1 - cc - dd) + translation[1] * (bc - ad) + translation[2] * (bd + ac);
+    transform.position[1] += translation[0] * (bc + ad) + translation[1] * (1 - bb - dd) + translation[2] * (cd - ab);
+    transform.position[2] += translation[0] * (bd - ac) + translation[1] * (cd + ab) + translation[2] * (1 - bb - cc);
+}
+
 pub fn rotate(transform: *Transform, rotation: Rotation) void {
+    @setFloatMode(.optimized);
+
     transform.rotation = normalizeRotation(combineRotations(transform.rotation, rotation));
 }
 
 pub fn rotateLocal(transform: *Transform, rotation: Rotation) void {
+    @setFloatMode(.optimized);
+
     transform.rotation = normalizeRotation(combineRotations(rotation, transform.rotation));
 }
 
