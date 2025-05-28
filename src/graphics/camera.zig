@@ -4,13 +4,16 @@ const Transform = @import("transform.zig");
 const Camera = @This();
 
 transform: Transform,
-lens: @Vector(2, f32),
+/// tangent of the half of the view angle (90 degress = 1 "lens")
+lens: f32,
 near: f32,
 far: f32,
+/// width = height * aspect
+aspect: f32,
 
 pub fn matrix(camera: Camera) @Vector(16, f32) {
-    const xx = 1.0 / camera.lens[0];
-    const yy = 1.0 / camera.lens[1];
+    const xx = 1.0 / (camera.lens * camera.aspect);
+    const yy = 1.0 / camera.lens;
     const fnmod = 1.0 / (camera.far - camera.near);
     const zz = camera.far * fnmod;
     const wz = -camera.near * camera.far * fnmod;

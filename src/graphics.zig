@@ -191,7 +191,8 @@ pub fn create() GameError!Self {
             .transform = .{},
             .near = 1.0,
             .far = 1024.0,
-            .lens = .{ 1.5 * 16.0 / 9.0, 1.5 },
+            .lens = 1.5,
+            .aspect = 16.0 / 9.0,
         },
     };
 }
@@ -321,7 +322,7 @@ pub fn beginDraw(self: *Self) GameError!bool {
     self.command_buffer = sdl.AcquireGPUCommandBuffer(self.device) orelse return GameError.SdlError;
     if (self.to_resize) |new_size| {
         try self.resetTextures(new_size[0], new_size[1]);
-        self.camera.lens[0] = self.camera.lens[1] * @as(f32, @floatFromInt(new_size[0])) / @as(f32, @floatFromInt(new_size[1]));
+        self.camera.aspect = @as(f32, @floatFromInt(new_size[0])) / @as(f32, @floatFromInt(new_size[1]));
         self.window_size = new_size;
         self.to_resize = null;
     }
