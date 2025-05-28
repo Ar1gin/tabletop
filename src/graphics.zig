@@ -188,9 +188,7 @@ pub fn create() GameError!Self {
         .window_size = .{ 1600, 900 },
 
         .camera = Camera{
-            .transform = Transform{
-                .position = .{ 0.0, 0.0, 4.0 },
-            },
+            .transform = .{},
             .near = 1.0,
             .far = 1024.0,
             .lens = .{ 1.5 * 16.0 / 9.0, 1.5 },
