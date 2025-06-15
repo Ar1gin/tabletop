@@ -6,8 +6,6 @@ const System = @import("graph/system.zig");
 // TODO:
 // - Use arena allocator?
 // - Resolve missing resource problem
-// - Parse system sets into a properly defined data structure instead of relying on `@typeInfo`
-// - Find a better way to represent system sets
 // - Organize a better way to execute single commands on graph
 // - Handle system errors
 // - Removing of resources
@@ -97,7 +95,7 @@ pub fn reset(self: *Self) void {
         for (controller.commands()) |*command| {
             switch (command.*) {
                 .add_resource => |*resource| resource.deinit(controller.alloc),
-                .queue_system => |*system| system.deinit(controller.alloc),
+                .queue_system => {},
             }
         }
         controller.clear();
@@ -105,10 +103,6 @@ pub fn reset(self: *Self) void {
             i * self.duds.items.len / self.controllers.items.len,
             (i + 1) * self.duds.items.len / self.controllers.items.len,
         );
-    }
-    // System cleanup
-    for (self.system_queue.items) |*system| {
-        system.deinit(self.alloc);
     }
     self.system_queue.clearRetainingCapacity();
     // Duds cleanup
@@ -118,7 +112,6 @@ pub fn reset(self: *Self) void {
 }
 
 fn enqueueSystem(self: *Self, system: System) !void {
-    errdefer system.deinit(self.alloc);
     try self.system_queue.append(self.alloc, system);
 }
 
@@ -148,7 +141,6 @@ pub fn runAllSystems(self: *Self) GraphError!void {
 
         const next_system = self.system_queue.pop().?;
 
-        defer next_system.deinit(self.alloc);
         self.runSystem(next_system) catch |err| {
             std.debug.print("System run error: {} while running {s}\n", .{ err, next_system.label });
             return err;
@@ -278,17 +270,17 @@ test "simple graph smoke test" {
             cmd.queue(addOne);
 
             cmd.queue(.{
-                .first = .{
+                .{
                     addThousand,
                     addThousand,
                     addThousand,
                 },
-                .second = .{
+                .{
                     subThousand,
                     subThousand,
                     subThousand,
                 },
-                .ordered = true,
+                Controller.Option.ordered,
             });
         }
     };
@@ -324,7 +316,7 @@ test "complex queue graph smoke test" {
 
         fn queueManySystems(cmd: *Controller) void {
             cmd.queue(.{
-                .@"0" = .{
+                .{
                     addTen,
                     addTen,
                     addTen,
@@ -333,7 +325,7 @@ test "complex queue graph smoke test" {
                 },
                 // `data1` = 20
                 // `data2` = 5
-                .@"1" = .{
+                .{
                     mulTen,
                     mulTen,
                     mulTwo,
@@ -341,12 +333,12 @@ test "complex queue graph smoke test" {
                 },
                 // `data1` = 8000
                 // `data2` = 9
-                .@"2" = .{
+                .{
                     subTwenty,
                 },
-                .ordered = true,
                 // `data1` = 7980
                 // `data2` = 10
+                Controller.Option.ordered,
             });
         }
         fn addTen(rsc: *Rsc) void {

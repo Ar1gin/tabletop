@@ -4,6 +4,8 @@ const System = @import("system.zig");
 const Resource = @import("resource.zig");
 const Controller = @This();
 
+pub const Option = utils.SystemSetOption;
+
 const DEFAULT_CONTROLLER_CAPACITY = 8;
 
 alloc: std.mem.Allocator,
@@ -90,50 +92,42 @@ fn queueInternal(self: *Controller, comptime system_set: anytype) !void {
     const command_buffer = try self.command_buffer.addManyAsSlice(self.alloc, utils.countSystems(system_set));
     errdefer self.command_buffer.shrinkRetainingCapacity(prev_count);
 
-    const commands_created = try self.createQueueCommands(system_set, command_buffer, null, self.submit_dud);
+    const commands_created = try self.createQueueCommands(utils.SystemSet.fromAny(system_set), command_buffer, null, self.submit_dud);
     std.debug.assert(commands_created == command_buffer.len);
 }
 
 fn createQueueCommands(
     self: *Controller,
-    comptime system_set: anytype,
+    comptime system_set: utils.SystemSet,
     command_buffer: []Command,
     requires_dud: ?System.Dud.Id,
     submit_dud: ?System.Dud.Id,
 ) !usize {
-    switch (@typeInfo(@TypeOf(system_set))) {
-        .@"fn" => {
-            var system = try System.fromFunction(system_set, self.alloc);
-            system.requires_dud = requires_dud;
-            system.submit_dud = submit_dud;
-            command_buffer[0] = .{ .queue_system = system };
+    switch (system_set) {
+        .single => |single| {
+            command_buffer[0] = .{ .queue_system = .{
+                .function_runner = single.runner,
+                .requested_types = single.requests,
+                .requires_dud = requires_dud,
+                .submit_dud = submit_dud,
+                .label = single.label,
+            } };
             return 1;
         },
-        .@"struct" => {
-            const ordered = utils.getOptionalTupleField(system_set, "ordered", false);
+        .set => |set| {
             var queued_total: usize = 0;
             var prev_dud = requires_dud;
             var next_dud = submit_dud;
 
-            errdefer for (command_buffer[0..queued_total]) |command| {
-                command.queue_system.deinit(self.alloc);
-            };
-
-            if (ordered) {
+            if (set.ordered) {
                 next_dud = requires_dud;
             }
 
             var queued_sets: usize = 0;
-            var total_sets: usize = 0;
-            inline for (@typeInfo(@TypeOf(system_set)).@"struct".fields) |field| {
-                switch (@typeInfo(field.type)) {
-                    .@"fn", .@"struct" => total_sets += 1,
-                    else => {},
-                }
-            }
+            const total_sets: usize = set.subsets.len;
 
-            inline for (@typeInfo(@TypeOf(system_set)).@"struct".fields) |field| {
-                if (ordered) {
+            inline for (set.subsets) |subset| {
+                if (set.ordered) {
                     prev_dud = next_dud;
                     if (queued_sets == total_sets - 1) {
                         next_dud = submit_dud;
@@ -142,22 +136,16 @@ fn createQueueCommands(
                         next_dud = self.acquireDud().?;
                     }
                 }
-                switch (@typeInfo(field.type)) {
-                    .@"fn", .@"struct" => {
-                        queued_total += try self.createQueueCommands(
-                            @field(system_set, field.name),
-                            command_buffer[queued_total..],
-                            prev_dud,
-                            next_dud,
-                        );
-                        queued_sets += 1;
-                    },
-                    else => {},
-                }
+                queued_total += try self.createQueueCommands(
+                    subset,
+                    command_buffer[queued_total..],
+                    prev_dud,
+                    next_dud,
+                );
+                queued_sets += 1;
             }
             return queued_total;
         },
-        else => @compileError("System set must be either a single function or a tuple of other system sets"),
     }
 }
 
@@ -204,7 +192,7 @@ pub fn deinit(self: *Controller) void {
     for (self.command_buffer.items) |*command| {
         switch (command.*) {
             .add_resource => |*resource| resource.deinit(self.alloc),
-            .queue_system => |*system| system.deinit(self.alloc),
+            .queue_system => {},
         }
     }
     self.clear();

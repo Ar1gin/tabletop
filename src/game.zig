@@ -71,11 +71,11 @@ pub fn run(self: *Self) GameError!void {
 
         var controller = try self.graph.getController();
         controller.queue(.{
-            .events = processEvents,
-            .update = debug_scene.update,
-            .begin_draw = beginDraw,
-            .end_draw = endDraw,
-            .ordered = true,
+            processEvents,
+            debug_scene.update,
+            beginDraw,
+            endDraw,
+            Graph.Controller.Option.ordered,
         });
         try self.graph.freeController(controller);
 
@@ -159,9 +159,9 @@ fn processEvents(
 pub fn deinit(self: *Self) void {
     var controller = self.graph.getController() catch unreachable;
     controller.queue(.{
-        .deinit = debug_scene.deinit,
-        .clean = clean,
-        .ordered = true,
+        debug_scene.deinit,
+        clean,
+        Graph.Controller.Option.ordered,
     });
     self.graph.freeController(controller) catch unreachable;
     self.graph.runAllSystems() catch unreachable;

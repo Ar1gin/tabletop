@@ -6,6 +6,77 @@ const System = @import("system.zig");
 pub const Hash = u32;
 const HashAlgorithm = std.crypto.hash.blake2.Blake2s(@bitSizeOf(Hash));
 
+pub const SystemSetOption = enum {
+    ordered,
+};
+
+pub const SystemRequest = union(enum) {
+    resource: Hash,
+    controller: void,
+};
+
+pub const SystemSet = union(enum) {
+    single: struct {
+        runner: *const fn ([]const *anyopaque) void,
+        requests: []const SystemRequest,
+        label: []const u8,
+    },
+    set: struct {
+        subsets: []const SystemSet,
+        ordered: bool,
+    },
+
+    pub fn fromAny(comptime any: anytype) SystemSet {
+        return comptime switch (@typeInfo(@TypeOf(any))) {
+            .@"struct" => fromStruct(any),
+            .@"fn" => fromFunction(any),
+            else => @compileError("System set must be either a tuple or a function, got " ++ @typeName(@TypeOf(any))),
+        };
+    }
+    pub fn fromStruct(comptime set: anytype) SystemSet {
+        return comptime blk: {
+            var subset_count = 0;
+            for (@typeInfo(@TypeOf(set)).@"struct".fields) |field| {
+                const info = @typeInfo(field.type);
+                if (info == .@"fn" or info == .@"struct") {
+                    subset_count += 1;
+                }
+            }
+            var subsets: [subset_count]SystemSet = undefined;
+            var ordered = false;
+            var i = 0;
+            for (@typeInfo(@TypeOf(set)).@"struct".fields) |field| {
+                const info = @typeInfo(field.type);
+                if (info == .@"fn" or info == .@"struct") {
+                    subsets[i] = SystemSet.fromAny(@field(set, field.name));
+                    i += 1;
+                    continue;
+                }
+                if (field.type == SystemSetOption) {
+                    switch (@field(set, field.name)) {
+                        SystemSetOption.ordered => ordered = true,
+                    }
+                    i += 1;
+                    continue;
+                }
+                @compileError("System set contains extraneous elements");
+            }
+            const subsets_const = subsets;
+            break :blk SystemSet{ .set = .{
+                .subsets = &subsets_const,
+                .ordered = ordered,
+            } };
+        };
+    }
+    pub fn fromFunction(comptime function: anytype) SystemSet {
+        return comptime SystemSet{ .single = .{
+            .runner = generateRunner(function),
+            .requests = generateRequests(function),
+            .label = @typeName(@TypeOf(function)),
+        } };
+    }
+};
+
 pub inline fn hashType(comptime h_type: type) Hash {
     return hashString(@typeName(h_type));
 }
@@ -29,6 +100,7 @@ pub fn validateResource(comptime resource_type: type) void {
     }
 }
 
+// TODO: Make validators print helpful errors so I don't have to check reference trace all the time
 pub fn validateSystem(comptime system: anytype) void {
     const info = @typeInfo(@TypeOf(system));
     if (info != .@"fn") @compileError("System can only be a function, got " ++ @typeName(system));
@@ -62,7 +134,7 @@ pub fn validateSystemSet(comptime system_set: anytype) void {
                     switch (@typeInfo(field_info.type)) {
                         .@"fn", .@"struct" => validateSystemSet(@field(system_set, field_info.name)),
                         else => {
-                            if (checkIsField(field_info, "ordered", bool)) continue;
+                            if (field_info.type == SystemSetOption) continue;
                             @compileError("Invalid field \"" ++
                                 field_info.name ++
                                 "\" of type `" ++
@@ -98,27 +170,17 @@ pub fn generateRunner(comptime system: anytype) fn ([]const *anyopaque) void {
     return RunnerImpl.runner;
 }
 
-pub fn checkIsField(field: std.builtin.Type.StructField, field_name: []const u8, comptime field_type: type) bool {
-    if (!std.mem.eql(u8, field.name, field_name)) return false;
-    if (field.type != field_type) return false;
-    return true;
-}
-
-pub fn getOptionalTupleField(tuple: anytype, comptime field_name: []const u8, comptime default: anytype) @TypeOf(default) {
+pub fn generateRequests(comptime function: anytype) []const SystemRequest {
     return comptime blk: {
-        for (@typeInfo(@TypeOf(tuple)).@"struct".fields) |field| {
-            if (!std.mem.eql(u8, field.name, field_name)) continue;
-            if (@TypeOf(default) != field.type)
-                @compileError("Cannot get tuple field `" ++
-                    field_name ++
-                    "` with type `" ++
-                    @typeName(@TypeOf(default)) ++
-                    "` (tuple field has type `" ++
-                    @typeName(field.type) ++
-                    "`)");
-            break :blk @field(tuple, field.name);
+        var requests: [@typeInfo(@TypeOf(function)).@"fn".params.len]SystemRequest = undefined;
+        for (0.., @typeInfo(@TypeOf(function)).@"fn".params) |i, param| {
+            switch (@typeInfo(param.type.?).pointer.child) {
+                Controller => requests[i] = .controller,
+                else => |resource_type| requests[i] = .{ .resource = hashType(resource_type) },
+            }
         }
-        break :blk default;
+        const requests_const = requests;
+        break :blk &requests_const;
     };
 }
 
