@@ -379,7 +379,7 @@ fn loadShader(device: *sdl.GPUDevice, path: []const u8, info: sdl.GPUShaderCreat
     const file = std.fs.cwd().openFile(path, .{}) catch return GameError.OSError;
     defer file.close();
 
-    const code = file.readToEndAllocOptions(std.heap.c_allocator, 1024 * 1024 * 1024, null, @alignOf(u8), 0) catch return GameError.OSError;
+    const code = file.readToEndAllocOptions(std.heap.c_allocator, 1024 * 1024 * 1024, null, .@"1", 0) catch return GameError.OSError;
     defer std.heap.c_allocator.free(code);
 
     var updated_info = info;

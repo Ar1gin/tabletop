@@ -2,7 +2,7 @@
     .name = .spacefarer,
     .version = "0.0.0",
     .fingerprint = 0x946ddccb5911fb15,
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",

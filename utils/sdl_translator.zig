@@ -8,15 +8,19 @@ const PREFIX = "SDL_";
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+    const alloc = arena.allocator();
 
     var arg_iter = try std.process.argsWithAllocator(alloc);
-    defer arg_iter.deinit();
 
     _ = arg_iter.next();
     const output = arg_iter.next().?;
 
-    const file = try std.fs.createFileAbsolute(output, .{});
+    const file = if (std.fs.path.isAbsolute(output))
+        try std.fs.createFileAbsolute(output, .{})
+    else
+        try std.fs.cwd().createFile(output, .{});
     defer file.close();
 
     const writer = file.writer();
