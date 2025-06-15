@@ -12,7 +12,10 @@ const Graphics = @import("graphics.zig");
 pub const RunInfo = struct { running: bool };
 pub const Mouse = @import("mouse.zig");
 pub const Keyboard = @import("keyboard.zig");
-pub const Time = @import("time.zig");
+pub const Time = struct {
+    delta: f32,
+    now: sdl.Time,
+};
 
 alloc: std.mem.Allocator,
 graph: Graph,
@@ -72,7 +75,7 @@ pub fn run(self: *Self) GameError!void {
         var controller = try self.graph.getController();
         controller.queue(.{
             processEvents,
-            debug_scene.update,
+            debug_scene.updateReal,
             beginDraw,
             endDraw,
             Graph.Controller.Option.ordered,
