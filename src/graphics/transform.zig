@@ -181,6 +181,9 @@ pub fn extractNormal(vector: Position) struct { Position, f32 } {
     @setFloatMode(.optimized);
 
     const length = @sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
+    if (length < 1e-15) {
+        return .{ @Vector(3, f32){ 0, 0, -1 }, 1 };
+    }
     return .{ vector / @as(Position, @splat(length)), length };
 }
 

@@ -15,7 +15,7 @@ pub const Controller = @import("graph/controller.zig");
 const MAX_SYSTEM_REQUESTS = 8;
 const DEFAULT_SYSTEM_CAPACITY = 16;
 const DEFAULT_CONTROLLERS = 2;
-const DEFAULT_DUDS_PER_CONTROLLER = 4;
+const DEFAULT_DUDS_PER_CONTROLLER = 32;
 
 const ResourceMap = std.AutoArrayHashMapUnmanaged(utils.Hash, Resource);
 const SystemQueue = std.ArrayListUnmanaged(System);

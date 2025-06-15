@@ -68,9 +68,11 @@ pub fn run(self: *Self) GameError!void {
         var current_time: sdl.Time = undefined;
         if (sdl.GetCurrentTime(&current_time)) {
             const time = self.graph.getResource(Time).?;
-            time.delta = @as(f32, @floatFromInt(current_time - time.now)) * 0.000000001;
+            if (time.now != 0) {
+                time.delta = @as(f32, @floatFromInt(current_time - time.now)) * 0.000000001;
+            }
             time.now = current_time;
-        }
+        } else return error.SdlError;
 
         var controller = try self.graph.getController();
         controller.queue(.{

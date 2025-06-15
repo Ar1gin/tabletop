@@ -10,8 +10,14 @@ pub inline fn lerpTime(a: anytype, b: anytype, t: f32, comptime f: f32) @TypeOf(
 pub fn lerpTimeLn(a: anytype, b: anytype, t: f32, lnf: f32) @TypeOf(a, b) {
     @setFloatMode(.optimized);
 
-    const a_factor = @exp(lnf * t);
-    const b_factor = 1.0 - a_factor;
+    return lerp(b, a, @exp(lnf * t));
+}
+
+pub fn lerp(a: anytype, b: anytype, f: f32) @TypeOf(a, b) {
+    @setFloatMode(.optimized);
+
+    const a_factor = 1.0 - f;
+    const b_factor = f;
 
     switch (@typeInfo(@TypeOf(a, b))) {
         .float => return a_factor * a + b_factor * b,
@@ -84,6 +90,18 @@ pub fn length(vector: anytype) f32 {
 }
 
 pub fn dot(a: anytype, b: anytype) f32 {
+    @setFloatMode(.optimized);
+
+    return @reduce(.Add, a * b);
+}
+
+pub fn lengthInt(vector: anytype) f32 {
+    @setFloatMode(.optimized);
+
+    return @sqrt(@as(f32, @floatFromInt(dotInt(vector, vector))));
+}
+
+pub fn dotInt(a: anytype, b: anytype) (@typeInfo(@TypeOf(a)).vector.child) {
     @setFloatMode(.optimized);
 
     return @reduce(.Add, a * b);
