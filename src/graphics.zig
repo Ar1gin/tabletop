@@ -11,6 +11,11 @@ pub const Mesh = struct {
     vertex_count: usize,
 };
 
+pub const Texture = struct {
+    texture: *sdl.GPUTexture,
+    sampler: *sdl.GPUSampler,
+};
+
 window: *sdl.Window,
 renderer: *sdl.Renderer,
 device: *sdl.GPUDevice,
@@ -41,7 +46,7 @@ to_resize: ?[2]u32 = null,
 const VERTEX_BUFFER_DEFAULT_CAPACITY = 1024;
 const VERTEX_BUFFER_GROWTH_MULTIPLIER = 2;
 const TRANSFER_BUFFER_DEFAULT_CAPACITY = 1024;
-const BYTES_PER_VERTEX = 3 * 4;
+const BYTES_PER_VERTEX = 5 * 4;
 
 const Self = @This();
 pub fn create() GameError!Self {
@@ -96,6 +101,7 @@ pub fn create() GameError!Self {
             .entrypoint = "main",
             .format = sdl.GPU_SHADERFORMAT_SPIRV,
             .stage = sdl.GPU_SHADERSTAGE_FRAGMENT,
+            .num_samplers = 1,
         },
     );
     errdefer sdl.ReleaseGPUShader(device, shader_frag);
@@ -132,18 +138,25 @@ pub fn create() GameError!Self {
         .vertex_input_state = .{
             .vertex_buffer_descriptions = &.{
                 .slot = 0,
-                // 3 Coordinates * 4 Bytes
-                .pitch = 3 * 4,
+                .pitch = 5 * 4,
                 .input_rate = sdl.GPU_VERTEXINPUTRATE_VERTEX,
             },
             .num_vertex_buffers = 1,
-            .vertex_attributes = &sdl.GPUVertexAttribute{
-                .offset = 0,
-                .location = 0,
-                .format = sdl.GPU_VERTEXELEMENTFORMAT_FLOAT3,
-                .buffer_slot = 0,
+            .vertex_attributes = &[2]sdl.GPUVertexAttribute{
+                sdl.GPUVertexAttribute{
+                    .offset = 0,
+                    .location = 0,
+                    .format = sdl.GPU_VERTEXELEMENTFORMAT_FLOAT3,
+                    .buffer_slot = 0,
+                },
+                sdl.GPUVertexAttribute{
+                    .offset = 3 * 4,
+                    .location = 1,
+                    .format = sdl.GPU_VERTEXELEMENTFORMAT_FLOAT2,
+                    .buffer_slot = 0,
+                },
             },
-            .num_vertex_attributes = 1,
+            .num_vertex_attributes = 2,
         },
         .primitive_type = sdl.GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = presets.RASTERIZER_CULL,
@@ -216,6 +229,64 @@ pub fn destroy(self: *Self) void {
         self.command_buffer = null;
     }
     sdl.DestroyGPUDevice(self.device);
+}
+
+pub fn loadTexture(self: *Self, width: u32, height: u32, texture_bytes: []const u8) GameError!Texture {
+    const target_format = sdl.SDL_GetGPUSwapchainTextureFormat(self.device, self.window);
+
+    const texture = sdl.CreateGPUTexture(self.device, &sdl.GPUTextureCreateInfo{
+        .format = target_format,
+        .layer_count_or_depth = 1,
+        .width = width,
+        .height = height,
+        .num_levels = 1,
+        .sample_count = sdl.GPU_SAMPLECOUNT_1,
+        .usage = sdl.GPU_TEXTUREUSAGE_SAMPLER,
+    }) orelse return GameError.SdlError;
+    errdefer sdl.ReleaseGPUTexture(self.device, texture);
+
+    const command_buffer = sdl.AcquireGPUCommandBuffer(self.device) orelse return GameError.SdlError;
+    {
+        errdefer _ = sdl.CancelGPUCommandBuffer(command_buffer);
+
+        const copy_pass = sdl.BeginGPUCopyPass(command_buffer) orelse return GameError.SdlError;
+        defer sdl.EndGPUCopyPass(copy_pass);
+
+        const map: [*]u8 = @ptrCast(sdl.MapGPUTransferBuffer(self.device, self.transfer_buffer, false) orelse return GameError.SdlError);
+        @memcpy(map, texture_bytes);
+        sdl.UnmapGPUTransferBuffer(self.device, self.transfer_buffer);
+
+        sdl.UploadToGPUTexture(copy_pass, &sdl.GPUTextureTransferInfo{
+            .offset = 0,
+            .pixels_per_row = width,
+            .rows_per_layer = height,
+            .transfer_buffer = self.transfer_buffer,
+        }, &sdl.GPUTextureRegion{
+            .texture = texture,
+            .mip_level = 0,
+            .layer = 0,
+            .x = 0,
+            .y = 0,
+            .z = 0,
+            .w = width,
+            .h = height,
+            .d = 1,
+        }, false);
+    }
+    if (!sdl.SubmitGPUCommandBuffer(command_buffer)) return GameError.SdlError;
+
+    const sampler = sdl.CreateGPUSampler(self.device, &sdl.GPUSamplerCreateInfo{
+        .address_mode_u = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .address_mode_v = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .address_mode_w = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .mag_filter = sdl.GPU_FILTER_NEAREST,
+        .min_filter = sdl.GPU_FILTER_LINEAR,
+    }) orelse return GameError.SdlError;
+
+    return Texture{
+        .texture = texture,
+        .sampler = sampler,
+    };
 }
 
 pub fn loadMesh(self: *Self, mesh_bytes: []const u8) GameError!Mesh {
@@ -359,10 +430,14 @@ pub fn beginDraw(self: *Self) GameError!bool {
     return true;
 }
 
-pub fn drawMesh(self: *Self, mesh: Mesh, transform: Transform) GameError!void {
+pub fn drawMesh(self: *Self, mesh: Mesh, texture: Texture, transform: Transform) GameError!void {
     if (self.render_pass == null) return;
 
     sdl.PushGPUVertexUniformData(self.command_buffer, 1, &transform.matrix(), 16 * 4);
+    sdl.BindGPUFragmentSamplers(self.render_pass, 0, &sdl.GPUTextureSamplerBinding{
+        .texture = texture.texture,
+        .sampler = texture.sampler,
+    }, 1);
     sdl.DrawGPUPrimitives(self.render_pass, @intCast(mesh.vertex_count), 1, @intCast(mesh.vertex_start), 0);
 }
 

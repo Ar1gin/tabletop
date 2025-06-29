@@ -8,50 +8,62 @@ const Graphics = @import("graphics.zig");
 const Game = @import("game.zig");
 
 const CUBE_MESH_DATA = [_]f32{
-    -0.5, 0.5,  -0.5,
-    0.5,  0.5,  -0.5,
-    -0.5, -0.5, -0.5,
-    0.5,  -0.5, -0.5,
-    -0.5, -0.5, -0.5,
-    0.5,  0.5,  -0.5,
-    0.5,  0.5,  -0.5,
-    0.5,  0.5,  0.5,
-    0.5,  -0.5, -0.5,
-    0.5,  -0.5, 0.5,
-    0.5,  -0.5, -0.5,
-    0.5,  0.5,  0.5,
-    0.5,  0.5,  0.5,
-    -0.5, 0.5,  0.5,
-    0.5,  -0.5, 0.5,
-    -0.5, -0.5, 0.5,
-    0.5,  -0.5, 0.5,
-    -0.5, 0.5,  0.5,
-    -0.5, 0.5,  0.5,
-    -0.5, 0.5,  -0.5,
-    -0.5, -0.5, 0.5,
-    -0.5, -0.5, -0.5,
-    -0.5, -0.5, 0.5,
-    -0.5, 0.5,  -0.5,
-    -0.5, 0.5,  0.5,
-    0.5,  0.5,  0.5,
-    -0.5, 0.5,  -0.5,
-    0.5,  0.5,  -0.5,
-    -0.5, 0.5,  -0.5,
-    0.5,  0.5,  0.5,
-    -0.5, -0.5, -0.5,
-    0.5,  -0.5, -0.5,
-    -0.5, -0.5, 0.5,
-    0.5,  -0.5, 0.5,
-    -0.5, -0.5, 0.5,
-    0.5,  -0.5, -0.5,
+    -0.5, 0.5,  -0.5, 0.0, 0.0,
+    0.5,  0.5,  -0.5, 0.0, 0.0,
+    -0.5, -0.5, -0.5, 0.0, 0.0,
+    0.5,  -0.5, -0.5, 0.0, 0.0,
+    -0.5, -0.5, -0.5, 0.0, 0.0,
+    0.5,  0.5,  -0.5, 0.0, 0.0,
+    0.5,  0.5,  -0.5, 0.0, 0.0,
+    0.5,  0.5,  0.5,  0.0, 0.0,
+    0.5,  -0.5, -0.5, 0.0, 0.0,
+    0.5,  -0.5, 0.5,  0.0, 0.0,
+    0.5,  -0.5, -0.5, 0.0, 0.0,
+    0.5,  0.5,  0.5,  0.0, 0.0,
+    0.5,  0.5,  0.5,  0.0, 0.0,
+    -0.5, 0.5,  0.5,  0.0, 0.0,
+    0.5,  -0.5, 0.5,  0.0, 0.0,
+    -0.5, -0.5, 0.5,  0.0, 0.0,
+    0.5,  -0.5, 0.5,  0.0, 0.0,
+    -0.5, 0.5,  0.5,  0.0, 0.0,
+    -0.5, 0.5,  0.5,  0.0, 0.0,
+    -0.5, 0.5,  -0.5, 0.0, 0.0,
+    -0.5, -0.5, 0.5,  0.0, 0.0,
+    -0.5, -0.5, -0.5, 0.0, 0.0,
+    -0.5, -0.5, 0.5,  0.0, 0.0,
+    -0.5, 0.5,  -0.5, 0.0, 0.0,
+    -0.5, 0.5,  0.5,  0.0, 0.0,
+    0.5,  0.5,  0.5,  0.0, 0.0,
+    -0.5, 0.5,  -0.5, 0.0, 0.0,
+    0.5,  0.5,  -0.5, 0.0, 0.0,
+    -0.5, 0.5,  -0.5, 0.0, 0.0,
+    0.5,  0.5,  0.5,  0.0, 0.0,
+    -0.5, -0.5, -0.5, 0.0, 0.0,
+    0.5,  -0.5, -0.5, 0.0, 0.0,
+    -0.5, -0.5, 0.5,  0.0, 0.0,
+    0.5,  -0.5, 0.5,  0.0, 0.0,
+    -0.5, -0.5, 0.5,  0.0, 0.0,
+    0.5,  -0.5, -0.5, 0.0, 0.0,
 };
 const PLANE_MESH_DATA = [_]f32{
-    -0.5, -0.5, 0,
-    0.5,  0.5,  0,
-    -0.5, 0.5,  0,
-    0.5,  0.5,  0,
-    -0.5, -0.5, 0,
-    0.5,  -0.5, 0,
+    -0.5, -0.5, 0, 0.0, 1.0,
+    0.5,  0.5,  0, 1.0, 0.0,
+    -0.5, 0.5,  0, 0.0, 0.0,
+    0.5,  0.5,  0, 1.0, 0.0,
+    -0.5, -0.5, 0, 0.0, 1.0,
+    0.5,  -0.5, 0, 1.0, 1.0,
+};
+// const TEXTURE_DATA = [_]u8{
+//     255, 0,   0,   255,
+//     0,   255, 0,   255,
+//     0,   0,   255, 255,
+//     0,   0,   0,   255,
+// };
+const TEXTURE_DATA = [_]u8{
+    255, 0,   0,   255,
+    0,   255, 0,   255,
+    0,   0,   255, 255,
+    0,   0,   0,   255,
 };
 
 pub const WorldTime = struct {
@@ -72,6 +84,7 @@ pub const PlayerState = union(enum) {
 
 pub const Player = struct {
     mesh: Graphics.Mesh,
+    texture: Graphics.Texture,
     transform: Transform,
     position: @Vector(2, i32),
     state: PlayerState,
@@ -83,12 +96,14 @@ pub const Player = struct {
 
 pub const Environment = struct {
     mesh: Graphics.Mesh,
+    texture: Graphics.Texture,
     transform: Transform,
 };
 
 pub fn init(controller: *Controller, graphics: *Graphics) !void {
     controller.addResource(Player{
         .mesh = try graphics.loadMesh(@ptrCast(&CUBE_MESH_DATA)),
+        .texture = try graphics.loadTexture(2, 2, @ptrCast(&TEXTURE_DATA)),
         .transform = .{},
         .position = .{ 0, 0 },
         .state = .idle,
@@ -98,6 +113,7 @@ pub fn init(controller: *Controller, graphics: *Graphics) !void {
     });
     controller.addResource(Environment{
         .mesh = try graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA)),
+        .texture = try graphics.loadTexture(2, 2, @ptrCast(&TEXTURE_DATA)),
         .transform = .{
             .position = .{ 0, 0, -1 },
             .scale = @splat(5),
@@ -259,10 +275,10 @@ pub fn draw(
         env.transform.rotation,
         Transform.rotationByAxis(.{ 0, 0, 1 }, world_time.time.unitsSince(world_time.last_time) * std.math.pi),
     );
-    try graphics.drawMesh(env.mesh, env.transform);
-    try graphics.drawMesh(env.mesh, Transform{
+    try graphics.drawMesh(env.mesh, env.texture, env.transform);
+    try graphics.drawMesh(env.mesh, env.texture, Transform{
         .position = .{ 0, 0, -0.5 },
         .scale = @splat(5),
     });
-    try graphics.drawMesh(player.mesh, player.transform);
+    try graphics.drawMesh(player.mesh, player.texture, player.transform);
 }
