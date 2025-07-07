@@ -41,3 +41,11 @@ pub fn unitsFromDuration(duration: TimeType) f32 {
 pub fn durationFromUnits(units: f32) TimeType {
     return @intFromFloat(@as(f32, @floatFromInt(TIME_UNIT)) * units);
 }
+
+pub fn earliest(a: Time, b: Time) Time {
+    return .{ .clock = @min(a.clock, b.clock) };
+}
+
+pub fn plus(time: Time, ticks: TimeType) Time {
+    return .{ .clock = time.clock + ticks };
+}
