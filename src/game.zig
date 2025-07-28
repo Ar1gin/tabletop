@@ -13,7 +13,7 @@ const Time = struct {
     now: sdl.Time,
 };
 
-var alloc: std.mem.Allocator = undefined;
+pub var alloc: std.mem.Allocator = undefined;
 
 var running: bool = false;
 var time: Time = .{ .delta = 0, .now = 0 };
