@@ -5,6 +5,7 @@ const err = @import("error.zig");
 const Mouse = @import("mouse.zig");
 const Keyboard = @import("keyboard.zig");
 
+pub const Assets = @import("assets.zig");
 pub const Graphics = @import("graphics.zig");
 pub const World = @import("world.zig");
 
@@ -28,6 +29,7 @@ pub fn init(game_alloc: std.mem.Allocator) void {
     Game.keyboard = .{};
     Game.mouse = .{ .x = 0, .y = 0, .dx = 0, .dy = 0 };
     Graphics.create();
+    Assets.init();
     World.initDebug();
 }
 
@@ -114,6 +116,7 @@ fn processEvents() void {
 
 pub fn deinit() void {
     World.deinit();
+    Assets.deinit();
     Graphics.destroy();
     sdl.Quit();
 }

@@ -1,4 +1,5 @@
 const Graphics = @import("graphics.zig");
+const Assets = @import("assets.zig");
 const Entity = @import("entity.zig");
 const Time = @import("time.zig");
 const comp = @import("components.zig");
@@ -9,7 +10,7 @@ var entities: comp.Storage(Entity, .{}) = undefined;
 
 pub var plane_mesh: Graphics.Mesh = undefined;
 pub var cube_mesh: Graphics.Mesh = undefined;
-pub var texture: Graphics.Texture = undefined;
+pub var texture: Assets.Texture = undefined;
 
 const World = @This();
 pub fn initDebug() void {
@@ -35,13 +36,13 @@ pub fn initDebug() void {
     time = Time.ZERO;
     World.plane_mesh = Graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA));
     World.cube_mesh = Graphics.loadMesh(@ptrCast(&CUBE_MESH_DATA));
-    World.texture = Graphics.loadTexture(2, 2, @ptrCast(&TEXTURE_DATA));
+    World.texture = Assets.load(.texture, "data/wawa.png");
 }
 
 pub fn deinit() void {
     Graphics.unloadMesh(World.plane_mesh);
     Graphics.unloadMesh(World.cube_mesh);
-    Graphics.unloadTexture(World.texture);
+    Assets.free(World.texture);
     World.entities.deinit();
 }
 
@@ -99,30 +100,35 @@ const CUBE_MESH_DATA = [_]f32{
     0.5,  -0.5, -0.5, 0.0, 0.0,
     -0.5, -0.5, -0.5, 0.0, 0.0,
     0.5,  0.5,  -0.5, 0.0, 0.0,
+
     0.5,  0.5,  -0.5, 0.0, 0.0,
     0.5,  0.5,  0.5,  0.0, 0.0,
     0.5,  -0.5, -0.5, 0.0, 0.0,
     0.5,  -0.5, 0.5,  0.0, 0.0,
     0.5,  -0.5, -0.5, 0.0, 0.0,
     0.5,  0.5,  0.5,  0.0, 0.0,
-    0.5,  0.5,  0.5,  0.0, 0.0,
+
+    0.5,  0.5,  0.5,  1.0, 0.0,
     -0.5, 0.5,  0.5,  0.0, 0.0,
-    0.5,  -0.5, 0.5,  0.0, 0.0,
-    -0.5, -0.5, 0.5,  0.0, 0.0,
-    0.5,  -0.5, 0.5,  0.0, 0.0,
+    0.5,  -0.5, 0.5,  1.0, 1.0,
+    -0.5, -0.5, 0.5,  0.0, 1.0,
+    0.5,  -0.5, 0.5,  1.0, 1.0,
     -0.5, 0.5,  0.5,  0.0, 0.0,
+
     -0.5, 0.5,  0.5,  0.0, 0.0,
     -0.5, 0.5,  -0.5, 0.0, 0.0,
     -0.5, -0.5, 0.5,  0.0, 0.0,
     -0.5, -0.5, -0.5, 0.0, 0.0,
     -0.5, -0.5, 0.5,  0.0, 0.0,
     -0.5, 0.5,  -0.5, 0.0, 0.0,
+
     -0.5, 0.5,  0.5,  0.0, 0.0,
     0.5,  0.5,  0.5,  0.0, 0.0,
     -0.5, 0.5,  -0.5, 0.0, 0.0,
     0.5,  0.5,  -0.5, 0.0, 0.0,
     -0.5, 0.5,  -0.5, 0.0, 0.0,
     0.5,  0.5,  0.5,  0.0, 0.0,
+
     -0.5, -0.5, -0.5, 0.0, 0.0,
     0.5,  -0.5, -0.5, 0.0, 0.0,
     -0.5, -0.5, 0.5,  0.0, 0.0,

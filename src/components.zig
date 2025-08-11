@@ -51,8 +51,12 @@ pub fn Storage(comptime T: type, comptime options: StorageOptions) type {
             }
             return null;
         }
-        pub fn free(self: *Self, key: Key) bool {
+        pub fn free(self: *Self, key: Key) ?*T {
             self.components.items[key.cell].count -= 1;
+            if (self.components.items[key.cell].count == 0) {
+                return &self.components.items[key.cell].component;
+            }
+            return null;
         }
         pub fn iter(self: *Self) Iterator {
             return .{

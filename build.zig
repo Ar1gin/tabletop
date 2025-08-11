@@ -50,8 +50,7 @@ fn stepBuildMain(
     exe.root_module.addImport("sdl", sdl_module);
     exe.step.dependOn(sdl_step);
 
-    const c_module = cModule(b, target, optimize);
-    exe.root_module.addImport("c", c_module);
+    exe.addIncludePath(b.path("lib/clibs"));
 
     return exe;
 }
@@ -105,21 +104,6 @@ fn stepSdlModule(
         sdl_module,
         translate_step,
     };
-}
-
-fn cModule(
-    b: *Build,
-    target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-) *Build.Module {
-    const c_module = b.addModule("c", .{
-        .root_source_file = b.path("lib/c.zig"),
-        .link_libc = true,
-        .target = target,
-        .optimize = optimize,
-    });
-    c_module.addIncludePath(b.path("lib/clibs"));
-    return c_module;
 }
 
 fn stepCopyData(

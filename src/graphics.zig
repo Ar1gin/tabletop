@@ -2,6 +2,7 @@ const std = @import("std");
 const sdl = @import("sdl");
 const err = @import("error.zig");
 const presets = @import("graphics/presets.zig");
+const Assets = @import("assets.zig");
 
 pub const Transform = @import("graphics/transform.zig");
 pub const Camera = @import("graphics/camera.zig");
@@ -9,11 +10,6 @@ pub const Camera = @import("graphics/camera.zig");
 pub const Mesh = struct {
     vertex_start: usize,
     vertex_count: usize,
-};
-
-pub const Texture = struct {
-    texture: *sdl.GPUTexture,
-    sampler: *sdl.GPUSampler,
 };
 
 var window: *sdl.Window = undefined;
@@ -45,7 +41,7 @@ var to_resize: ?[2]u32 = null;
 
 const VERTEX_BUFFER_DEFAULT_CAPACITY = 1024;
 const VERTEX_BUFFER_GROWTH_MULTIPLIER = 2;
-const TRANSFER_BUFFER_DEFAULT_CAPACITY = 1024;
+const TRANSFER_BUFFER_DEFAULT_CAPACITY = 4096;
 const BYTES_PER_VERTEX = 5 * 4;
 
 const Graphics = @This();
@@ -193,8 +189,9 @@ pub fn destroy() void {
     sdl.DestroyGPUDevice(Graphics.device);
 }
 
-pub fn loadTexture(width: u32, height: u32, texture_bytes: []const u8) Texture {
-    const target_format = sdl.SDL_GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
+pub fn loadTexture(width: u32, height: u32, texture_bytes: []const u8) struct { *sdl.GPUTexture, *sdl.GPUSampler } {
+    // const target_format = sdl.SDL_GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
+    const target_format = sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
     const texture = sdl.CreateGPUTexture(Graphics.device, &sdl.GPUTextureCreateInfo{
         .format = target_format,
@@ -242,15 +239,15 @@ pub fn loadTexture(width: u32, height: u32, texture_bytes: []const u8) Texture {
         .min_filter = sdl.GPU_FILTER_LINEAR,
     }) orelse err.sdl();
 
-    return Texture{
-        .texture = texture,
-        .sampler = sampler,
+    return .{
+        texture,
+        sampler,
     };
 }
 
-pub fn unloadTexture(texture: Texture) void {
-    sdl.ReleaseGPUSampler(Graphics.device, texture.sampler);
-    sdl.ReleaseGPUTexture(Graphics.device, texture.texture);
+pub fn unloadTexture(texture: *sdl.GPUTexture, sampler: *sdl.GPUSampler) void {
+    sdl.ReleaseGPUSampler(Graphics.device, sampler);
+    sdl.ReleaseGPUTexture(Graphics.device, texture);
 }
 
 pub fn loadMesh(mesh_bytes: []const u8) Mesh {
@@ -388,13 +385,14 @@ pub fn beginDraw() bool {
     return true;
 }
 
-pub fn drawMesh(mesh: Mesh, texture: Texture, transform: Transform) void {
+pub fn drawMesh(mesh: Mesh, texture: Assets.Texture, transform: Transform) void {
     if (Graphics.render_pass == null) return;
+    const asset_texture = Assets.get(texture) orelse return;
 
     sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &transform.matrix(), 16 * 4);
     sdl.BindGPUFragmentSamplers(Graphics.render_pass, 0, &sdl.GPUTextureSamplerBinding{
-        .texture = texture.texture,
-        .sampler = texture.sampler,
+        .texture = asset_texture.texture,
+        .sampler = asset_texture.sampler,
     }, 1);
     sdl.DrawGPUPrimitives(Graphics.render_pass, @intCast(mesh.vertex_count), 1, @intCast(mesh.vertex_start), 0);
 }
