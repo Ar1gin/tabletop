@@ -11,6 +11,8 @@ player: bool = false,
 enemy: bool = false,
 controller: Controller = .{},
 next_update: Time = Time.ZERO,
+sway_x: math.Sway(f32) = .{ .amplitude = 1, .frequency = 0.11 },
+sway_y: math.Sway(f32) = .{ .amplitude = 1, .frequency = 0.13 },
 
 const Controller = struct {
     const Action = union(enum) {
@@ -78,20 +80,23 @@ fn updateController(self: *Self) void {
 }
 
 pub fn draw(self: *Self, delta: f32) void {
+    self.sway_x.update(delta);
+    self.sway_y.update(delta);
     const transform = Graphics.Transform{
+        .rotation = Graphics.Transform.rotationByAxis(.{ self.sway_x.value, self.sway_y.value, 0 }, 0.05),
         .position = .{
             @floatFromInt(self.position[0]),
             @floatFromInt(self.position[1]),
             0.5,
         },
     };
-    Graphics.drawMesh(World.cube_mesh, World.texture, transform);
+    Graphics.drawMesh(World.plane_mesh, World.texture, transform.matrix());
 
     if (!self.player) return;
 
     Graphics.camera.transform.position = math.lerpTimeLn(
         Graphics.camera.transform.position,
-        transform.position + @Vector(3, f32){ 0.0, -2.0, 5.0 },
+        transform.position + @Vector(3, f32){ 0.0, -1.0, 4.0 },
         delta,
         -25,
     );

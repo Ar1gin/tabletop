@@ -6,7 +6,7 @@ const comp = @import("components.zig");
 
 pub var time: Time = undefined;
 var next_stop: Time = undefined;
-var entities: comp.Storage(Entity, .{}) = undefined;
+pub var entities: comp.Storage(Entity, .{}) = undefined;
 
 pub var plane_mesh: Graphics.Mesh = undefined;
 pub var cube_mesh: Graphics.Mesh = undefined;
@@ -18,20 +18,6 @@ pub fn initDebug() void {
     _ = entities.add(.{
         .position = .{ 0, 0 },
         .player = true,
-    });
-    _ = entities.add(.{
-        .position = .{ 2, 0 },
-        .enemy = true,
-        .controller = .{
-            .move_units = 0.25,
-        },
-    });
-    _ = entities.add(.{
-        .position = .{ 3, 0 },
-        .enemy = true,
-        .controller = .{
-            .move_units = 0.25,
-        },
     });
     time = Time.ZERO;
     World.plane_mesh = Graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA));
@@ -60,7 +46,7 @@ pub fn updateReal(delta: f32) void {
 }
 
 pub fn draw(delta: f32) void {
-    Graphics.drawMesh(World.plane_mesh, World.texture, .{ .scale = @splat(5) });
+    Graphics.drawMesh(World.plane_mesh, World.texture, Graphics.Transform.matrix(.{ .scale = @splat(5) }));
     var iter = World.entities.iter();
     while (iter.next()) |entity| {
         entity.draw(delta);

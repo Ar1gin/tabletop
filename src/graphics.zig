@@ -385,11 +385,11 @@ pub fn beginDraw() bool {
     return true;
 }
 
-pub fn drawMesh(mesh: Mesh, texture: Assets.Texture, transform: Transform) void {
+pub fn drawMesh(mesh: Mesh, texture: Assets.Texture, matrix: Transform.TMatrix) void {
     if (Graphics.render_pass == null) return;
     const asset_texture = Assets.get(texture) orelse return;
 
-    sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &transform.matrix(), 16 * 4);
+    sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &matrix, 16 * 4);
     sdl.BindGPUFragmentSamplers(Graphics.render_pass, 0, &sdl.GPUTextureSamplerBinding{
         .texture = asset_texture.texture,
         .sampler = asset_texture.sampler,

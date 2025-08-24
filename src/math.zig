@@ -106,3 +106,34 @@ pub fn dotInt(a: anytype, b: anytype) (@typeInfo(@TypeOf(a)).vector.child) {
 
     return @reduce(.Add, a * b);
 }
+
+pub fn Sway(comptime T: type) type {
+    const STABILIZATION = -1;
+    return packed struct {
+        value: T = 0,
+        velocity: T = 0,
+        frequency: T,
+        amplitude: T,
+
+        const Self = @This();
+        pub fn update(self: *Self, delta: f32) void {
+            @setFloatMode(.optimized);
+
+            const dist = delta * -2 * std.math.pi * self.frequency;
+            const sin = std.math.sin(dist);
+            const cos = std.math.cos(dist);
+            var len = length(@Vector(2, T){ self.value, self.velocity });
+            if(len < 0.001) {
+                self.value = 0.001;
+                self.velocity = 0;
+                len = 0.001;
+            }
+            const new_value = self.value * cos - self.velocity * sin;
+            const new_velocity = self.value * sin + self.velocity * cos;
+            const target_len = lerpTimeLn(len, self.amplitude, delta, STABILIZATION);
+            const mult = target_len / len;
+            self.value = new_value * mult;
+            self.velocity = new_velocity * mult;
+        }
+    };
+}
