@@ -13,5 +13,6 @@ layout(set = 1, binding = 1) uniform Object{
 
 void main() {
     gl_Position = vec4(inCoord, 1.0) * object.transform * camera.transform;
+    gl_ClipDistance[0] = gl_Position.z;
     outUV = inUV;
 }

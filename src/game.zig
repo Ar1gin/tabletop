@@ -27,7 +27,16 @@ pub fn init(game_alloc: std.mem.Allocator) void {
     Game.running = false;
     Game.time = Time{ .now = 0, .delta = 0 };
     Game.keyboard = .{};
-    Game.mouse = .{ .x = 0, .y = 0, .dx = 0, .dy = 0 };
+    Game.mouse = .{
+        .buttons = .{},
+        .x_screen = 0,
+        .y_screen = 0,
+        .x_norm = 0,
+        .y_norm = 0,
+        .dx = 0,
+        .dy = 0,
+        .wheel = 0,
+    };
     Graphics.create();
     Assets.init();
     World.initDebug();
@@ -46,9 +55,11 @@ pub fn run() void {
         } else err.sdl();
 
         Game.processEvents();
-        World.updateReal(Game.time.delta);
+        Game.mouse.x_norm = (Game.mouse.x_screen / @as(f32, @floatFromInt(Graphics.getWidth()))) * 2 - 1;
+        Game.mouse.y_norm = (Game.mouse.y_screen / @as(f32, @floatFromInt(Graphics.getHeight()))) * -2 + 1;
+        World.update(Game.time.delta);
         if (Game.beginDraw()) {
-            World.draw(Game.time.delta);
+            World.draw();
             Game.endDraw();
         }
     }
@@ -66,6 +77,7 @@ fn processEvents() void {
     Game.mouse.dx = 0.0;
     Game.mouse.dy = 0.0;
     Game.keyboard.keys.reset();
+    Game.mouse.reset();
 
     sdl.PumpEvents();
     while (true) {
@@ -83,8 +95,8 @@ fn processEvents() void {
                 },
                 sdl.EVENT_MOUSE_MOTION => {
                     if (event.motion.windowID != Graphics.windowId()) continue;
-                    Game.mouse.x = event.motion.x;
-                    Game.mouse.y = event.motion.y;
+                    Game.mouse.x_screen = event.motion.x;
+                    Game.mouse.y_screen = event.motion.y;
                     Game.mouse.dx += event.motion.xrel;
                     Game.mouse.dy += event.motion.yrel;
                 },
@@ -103,6 +115,9 @@ fn processEvents() void {
                 sdl.EVENT_MOUSE_BUTTON_UP => {
                     if (event.button.windowID != Graphics.windowId()) continue;
                     Game.mouse.buttons.release(event.button.button);
+                },
+                sdl.EVENT_MOUSE_WHEEL => {
+                    Game.mouse.wheel += event.wheel.integer_y;
                 },
                 else => {},
             }

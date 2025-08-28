@@ -13,11 +13,11 @@ pub const Mesh = struct {
 };
 
 var window: *sdl.Window = undefined;
-var renderer: *sdl.Renderer = undefined;
 var device: *sdl.GPUDevice = undefined;
 /// Only available while drawing
 var command_buffer: ?*sdl.GPUCommandBuffer = null;
 var render_pass: ?*sdl.GPURenderPass = null;
+var render_target: ?*sdl.GPUTexture = null;
 
 var shader_vert: *sdl.GPUShader = undefined;
 var shader_frag: *sdl.GPUShader = undefined;
@@ -30,10 +30,12 @@ var transfer_buffer: *sdl.GPUTransferBuffer = undefined;
 var transfer_buffer_capacity: usize = undefined;
 
 var depth_texture: *sdl.GPUTexture = undefined;
-var msaa_resolve: *sdl.GPUTexture = undefined;
+var fsaa_target: *sdl.GPUTexture = undefined;
 var pipeline: *sdl.GPUGraphicsPipeline = undefined;
 
 var window_size: [2]u32 = undefined;
+var fsaa_scale: u32 = 4;
+var fsaa_level: u32 = 3;
 
 pub var camera: Camera = undefined;
 
@@ -41,26 +43,26 @@ var to_resize: ?[2]u32 = null;
 
 const VERTEX_BUFFER_DEFAULT_CAPACITY = 1024;
 const VERTEX_BUFFER_GROWTH_MULTIPLIER = 2;
-const TRANSFER_BUFFER_DEFAULT_CAPACITY = 4096;
+const TRANSFER_BUFFER_DEFAULT_CAPACITY = 4096 * 1024;
 const BYTES_PER_VERTEX = 5 * 4;
+const DEPTH_FORMAT = sdl.GPU_TEXTUREFORMAT_D32_FLOAT;
+const MIP_LEVEL = 4;
 
 const Graphics = @This();
 pub fn create() void {
     // Init
     if (!sdl.Init(sdl.INIT_VIDEO | sdl.INIT_EVENTS)) err.sdl();
+    if (!sdl.SetHint(sdl.HINT_LOGGING, "*=info")) err.sdl();
+    if (!sdl.SetHint(sdl.HINT_GPU_DRIVER, "vulkan")) err.sdl();
 
     // Window and Renderer
-    if (!sdl.CreateWindowAndRenderer(
+    Graphics.window = sdl.CreateWindow(
         "",
         1600,
         900,
         sdl.WINDOW_VULKAN | sdl.WINDOW_RESIZABLE,
-        @ptrCast(&Graphics.window),
-        @ptrCast(&Graphics.renderer),
-    )) err.sdl();
+    ) orelse err.sdl();
     Graphics.window_size = .{ 1600, 900 };
-
-    if (!sdl.SetRenderVSync(renderer, sdl.RENDERER_VSYNC_ADAPTIVE)) err.sdl();
 
     // Device
     Graphics.device = sdl.CreateGPUDevice(
@@ -113,8 +115,20 @@ pub fn create() void {
     var window_height: c_int = 1;
     if (!sdl.GetWindowSizeInPixels(Graphics.window, &window_width, &window_height)) err.sdl();
 
-    Graphics.depth_texture = createDepthTexture(@intCast(window_width), @intCast(window_height));
-    Graphics.msaa_resolve = createTexture(@intCast(window_width), @intCast(window_height), target_format);
+    Graphics.depth_texture = createTexture(
+        @as(u32, @intCast(window_width)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(window_height)) * Graphics.fsaa_scale,
+        DEPTH_FORMAT,
+        sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+        1,
+    );
+    Graphics.fsaa_target = createTexture(
+        @as(u32, @intCast(window_width)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(window_height)) * Graphics.fsaa_scale,
+        target_format,
+        sdl.GPU_TEXTUREUSAGE_COLOR_TARGET | sdl.GPU_TEXTUREUSAGE_SAMPLER,
+        fsaa_level,
+    );
 
     Graphics.pipeline = sdl.CreateGPUGraphicsPipeline(Graphics.device, &.{
         .vertex_shader = Graphics.shader_vert,
@@ -144,12 +158,9 @@ pub fn create() void {
         },
         .primitive_type = sdl.GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = presets.RASTERIZER_CULL,
-        .multisample_state = .{
-            .sample_count = sdl.GPU_SAMPLECOUNT_4,
-        },
         .depth_stencil_state = presets.DEPTH_ENABLED,
         .target_info = .{
-            .depth_stencil_format = sdl.GPU_TEXTUREFORMAT_D16_UNORM,
+            .depth_stencil_format = DEPTH_FORMAT,
             .color_target_descriptions = &sdl.GPUColorTargetDescription{
                 .format = target_format,
                 .blend_state = presets.BLEND_NORMAL,
@@ -161,20 +172,20 @@ pub fn create() void {
 
     Graphics.camera = Camera{
         .transform = .{},
-        .near = 1.0,
-        .far = 1024.0,
+        .near = 1.0 / 16.0,
+        .far = 128.0,
         .lens = 1.5,
         .aspect = 16.0 / 9.0,
+        .matrix = undefined,
     };
 }
 
 pub fn destroy() void {
     sdl.ReleaseWindowFromGPUDevice(Graphics.device, Graphics.window);
-    sdl.DestroyRenderer(Graphics.renderer);
     sdl.DestroyWindow(Graphics.window);
 
     sdl.ReleaseGPUGraphicsPipeline(Graphics.device, Graphics.pipeline);
-    sdl.ReleaseGPUTexture(Graphics.device, Graphics.msaa_resolve);
+    sdl.ReleaseGPUTexture(Graphics.device, Graphics.fsaa_target);
     sdl.ReleaseGPUTexture(Graphics.device, Graphics.depth_texture);
     sdl.ReleaseGPUBuffer(Graphics.device, Graphics.vertex_buffer);
     sdl.ReleaseGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer);
@@ -190,25 +201,22 @@ pub fn destroy() void {
 }
 
 pub fn loadTexture(width: u32, height: u32, texture_bytes: []const u8) struct { *sdl.GPUTexture, *sdl.GPUSampler } {
-    // const target_format = sdl.SDL_GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
     const target_format = sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
-    const texture = sdl.CreateGPUTexture(Graphics.device, &sdl.GPUTextureCreateInfo{
-        .format = target_format,
-        .layer_count_or_depth = 1,
-        .width = width,
-        .height = height,
-        .num_levels = 1,
-        .sample_count = sdl.GPU_SAMPLECOUNT_1,
-        .usage = sdl.GPU_TEXTUREUSAGE_SAMPLER,
-    }) orelse err.sdl();
+    const texture = Graphics.createTexture(
+        width,
+        height,
+        target_format,
+        sdl.GPU_TEXTUREUSAGE_SAMPLER | sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
+        MIP_LEVEL,
+    );
 
     const temp_command_buffer = sdl.AcquireGPUCommandBuffer(Graphics.device) orelse err.sdl();
     {
         const copy_pass = sdl.BeginGPUCopyPass(temp_command_buffer) orelse err.sdl();
         defer sdl.EndGPUCopyPass(copy_pass);
 
-        const map: [*]u8 = @ptrCast(sdl.MapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer, false) orelse err.sdl());
+        const map: [*]u8 = @ptrCast(sdl.MapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer, true) orelse err.sdl());
         @memcpy(map, texture_bytes);
         sdl.UnmapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer);
 
@@ -229,6 +237,7 @@ pub fn loadTexture(width: u32, height: u32, texture_bytes: []const u8) struct { 
             .d = 1,
         }, false);
     }
+    sdl.GenerateMipmapsForGPUTexture(temp_command_buffer, texture);
     if (!sdl.SubmitGPUCommandBuffer(temp_command_buffer)) err.sdl();
 
     const sampler = sdl.CreateGPUSampler(Graphics.device, &sdl.GPUSamplerCreateInfo{
@@ -237,6 +246,10 @@ pub fn loadTexture(width: u32, height: u32, texture_bytes: []const u8) struct { 
         .address_mode_w = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
         .mag_filter = sdl.GPU_FILTER_NEAREST,
         .min_filter = sdl.GPU_FILTER_LINEAR,
+        .mipmap_mode = sdl.GPU_SAMPLERMIPMAPMODE_LINEAR,
+        .min_lod = 0,
+        .max_lod = 16,
+        .mip_lod_bias = -2,
     }) orelse err.sdl();
 
     return .{
@@ -261,7 +274,7 @@ pub fn loadMesh(mesh_bytes: []const u8) Mesh {
         Graphics.growVertexBuffer(Graphics.vertex_buffer_capacity * size_mult);
     }
 
-    const map = sdl.MapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer, false) orelse err.sdl();
+    const map = sdl.MapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer, true) orelse err.sdl();
     @memcpy(@as([*]u8, @ptrCast(map)), mesh_bytes);
     sdl.UnmapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer);
 
@@ -353,22 +366,19 @@ pub fn beginDraw() bool {
         Graphics.to_resize = null;
     }
 
-    var render_target: ?*sdl.GPUTexture = null;
     var width: u32 = 0;
     var height: u32 = 0;
-    if (!sdl.WaitAndAcquireGPUSwapchainTexture(Graphics.command_buffer, Graphics.window, &render_target, &width, &height)) err.sdl();
-    // Hidden
-    if (render_target == null) return false;
+    if (!sdl.WaitAndAcquireGPUSwapchainTexture(Graphics.command_buffer, Graphics.window, &Graphics.render_target, &width, &height)) err.sdl();
+    // Window is probably hidden
+    if (Graphics.render_target == null) return false;
 
     Graphics.render_pass = sdl.BeginGPURenderPass(Graphics.command_buffer, &.{
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
         .cycle = false,
         .load_op = sdl.GPU_LOADOP_CLEAR,
-        .store_op = sdl.GPU_STOREOP_RESOLVE,
-        // .store_op = sdl.GPU_STOREOP_STORE,
-        .resolve_texture = render_target,
+        .store_op = sdl.GPU_STOREOP_STORE,
         .mip_level = 0,
-        .texture = Graphics.msaa_resolve,
+        .texture = Graphics.fsaa_target,
     }, 1, &.{
         .clear_depth = 1.0,
         .load_op = sdl.GPU_LOADOP_CLEAR,
@@ -380,7 +390,8 @@ pub fn beginDraw() bool {
 
     sdl.BindGPUGraphicsPipeline(Graphics.render_pass, Graphics.pipeline);
     sdl.BindGPUVertexBuffers(Graphics.render_pass, 0, &.{ .offset = 0, .buffer = Graphics.vertex_buffer }, 1);
-    sdl.PushGPUVertexUniformData(Graphics.command_buffer, 0, &Graphics.camera.matrix(), 16 * 4);
+    Graphics.camera.computeMatrix();
+    sdl.PushGPUVertexUniformData(Graphics.command_buffer, 0, &Graphics.camera.matrix, 16 * 4);
 
     return true;
 }
@@ -402,6 +413,23 @@ pub fn endDraw() void {
     defer Graphics.render_pass = null;
     if (Graphics.render_pass) |pass| {
         sdl.EndGPURenderPass(pass);
+
+        if (Graphics.fsaa_level > 1) sdl.GenerateMipmapsForGPUTexture(Graphics.command_buffer, Graphics.fsaa_target);
+        sdl.BlitGPUTexture(Graphics.command_buffer, &.{
+            .source = .{
+                .texture = Graphics.fsaa_target,
+                .w = Graphics.window_size[0],
+                .h = Graphics.window_size[1],
+                .mip_level = fsaa_level - 1,
+            },
+            .destination = .{
+                .texture = Graphics.render_target,
+                .w = Graphics.window_size[0],
+                .h = Graphics.window_size[1],
+            },
+            .load_op = sdl.GPU_LOADOP_DONT_CARE,
+            .filter = sdl.GPU_FILTER_NEAREST,
+        });
     }
     if (!sdl.SubmitGPUCommandBuffer(Graphics.command_buffer)) err.sdl();
 }
@@ -410,7 +438,7 @@ fn loadShader(path: []const u8, info: sdl.GPUShaderCreateInfo) *sdl.GPUShader {
     const file = std.fs.cwd().openFile(path, .{}) catch |e| err.file(e, path);
     defer file.close();
 
-    const code = file.readToEndAllocOptions(std.heap.c_allocator, std.math.maxInt(usize), null, .@"1", 0) catch |e| err.file(e, path);
+    const code = file.readToEndAllocOptions(std.heap.c_allocator, std.math.maxInt(usize), null, 1, 0) catch |e| err.file(e, path);
     defer std.heap.c_allocator.free(code);
 
     var updated_info = info;
@@ -419,38 +447,38 @@ fn loadShader(path: []const u8, info: sdl.GPUShaderCreateInfo) *sdl.GPUShader {
     return sdl.CreateGPUShader(device, &updated_info) orelse err.sdl();
 }
 
-fn createDepthTexture(width: u32, height: u32) *sdl.GPUTexture {
-    return sdl.CreateGPUTexture(device, &.{
-        .format = sdl.GPU_TEXTUREFORMAT_D16_UNORM,
-        .layer_count_or_depth = 1,
-        .width = width,
-        .height = height,
-        .num_levels = 1,
-        .sample_count = sdl.GPU_SAMPLECOUNT_4,
-        .usage = sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
-    }) orelse err.sdl();
-}
-
-fn createTexture(width: u32, height: u32, format: c_uint) *sdl.GPUTexture {
+fn createTexture(width: u32, height: u32, format: c_uint, usage: c_uint, mip_level: u32) *sdl.GPUTexture {
     return sdl.CreateGPUTexture(device, &.{
         .format = format,
         .layer_count_or_depth = 1,
         .width = width,
         .height = height,
-        .num_levels = 1,
-        .sample_count = sdl.GPU_SAMPLECOUNT_4,
-        .usage = sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
+        .num_levels = mip_level,
+        .sample_count = sdl.GPU_SAMPLECOUNT_1,
+        .usage = usage,
     }) orelse err.sdl();
 }
 
 fn resetTextures(width: u32, height: u32) void {
     sdl.ReleaseGPUTexture(Graphics.device, Graphics.depth_texture);
-    Graphics.depth_texture = createDepthTexture(width, height);
+    Graphics.depth_texture = createTexture(
+        width * Graphics.fsaa_scale,
+        height * Graphics.fsaa_scale,
+        DEPTH_FORMAT,
+        sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+        1,
+    );
 
     const target_format = sdl.SDL_GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
 
-    sdl.ReleaseGPUTexture(Graphics.device, Graphics.msaa_resolve);
-    Graphics.msaa_resolve = createTexture(width, height, target_format);
+    sdl.ReleaseGPUTexture(Graphics.device, Graphics.fsaa_target);
+    Graphics.fsaa_target = createTexture(
+        width * Graphics.fsaa_scale,
+        height * Graphics.fsaa_scale,
+        target_format,
+        sdl.GPU_TEXTUREUSAGE_COLOR_TARGET | sdl.GPU_TEXTUREUSAGE_SAMPLER,
+        fsaa_level,
+    );
 }
 
 pub fn resize(width: u32, height: u32) void {
@@ -459,4 +487,22 @@ pub fn resize(width: u32, height: u32) void {
 
 pub fn windowId() sdl.WindowID {
     return sdl.GetWindowID(Graphics.window);
+}
+
+pub fn getWidth() u32 {
+    return @max(1, Graphics.window_size[0]);
+}
+pub fn getHeight() u32 {
+    return @max(1, Graphics.window_size[1]);
+}
+
+pub fn generatePlane(x0: f32, y0: f32, x1: f32, y1: f32) [30]f32 {
+    return .{
+        -0.5, -0.5, 0, x0, y1,
+        0.5,  0.5,  0, x1, y0,
+        -0.5, 0.5,  0, x0, y0,
+        0.5,  0.5,  0, x1, y0,
+        -0.5, -0.5, 0, x0, y1,
+        0.5,  -0.5, 0, x1, y1,
+    };
 }

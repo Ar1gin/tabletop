@@ -11,42 +11,93 @@ pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = stepBuildMain(b, target, optimize);
-    b.installArtifact(exe);
+    const sdl_module, const sdl_step = stepSdlModule(b, target, optimize);
+
+    const client_exe = stepBuildClient(b, target, optimize, sdl_module, sdl_step);
+    const client_install = b.addInstallArtifact(client_exe, .{});
+
+    const server_exe = stepBuildServer(b, target, optimize);
+    const server_install = b.addInstallArtifact(server_exe, .{});
+
+    const offline_exe = stepBuildOffline(b, target, optimize, sdl_module, sdl_step);
+    const offline_install = b.addInstallArtifact(offline_exe, .{});
 
     const copy_data = stepCopyData(b, target, optimize);
+
+    b.getInstallStep().dependOn(&client_install.step);
+    b.getInstallStep().dependOn(&server_install.step);
+    b.getInstallStep().dependOn(&offline_install.step);
     b.getInstallStep().dependOn(copy_data);
 
-    const run = b.addRunArtifact(exe);
-    run.step.dependOn(b.getInstallStep());
+    const run = b.addRunArtifact(offline_exe);
+    run.step.dependOn(&offline_install.step);
+    run.step.dependOn(copy_data);
 
-    // Why is this not the default behavoir?
+    // Why is this not the default behavior?
     run.setCwd(b.path(std.fs.path.relative(b.allocator, b.build_root.path.?, b.exe_dir) catch unreachable));
 
     if (b.args) |args| {
         run.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run the app");
+    const run_step = b.step("run", "Build and Run tabletop in offline mode");
     run_step.dependOn(&run.step);
 
-    const check_step = b.step("check", "Check for build errors");
-    check_step.dependOn(&exe.step);
+    const check_step = b.step("check", "Check for build errors (offline build only)");
+    check_step.dependOn(&offline_exe.step);
 }
 
-fn stepBuildMain(
+fn stepBuildClient(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    sdl_module: *Build.Module,
+    sdl_step: *Build.Step,
+) *Build.Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = "tabletop_client",
+        .root_source_file = b.path("src/client.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("sdl", sdl_module);
+    exe.step.dependOn(sdl_step);
+
+    exe.addIncludePath(b.path("lib/clibs"));
+
+    return exe;
+}
+
+fn stepBuildServer(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *Build.Step.Compile {
     const exe = b.addExecutable(.{
-        .name = "spacefarer",
-        .root_source_file = b.path("src/main.zig"),
+        .name = "tabletop_server",
+        .root_source_file = b.path("src/server.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const sdl_module, const sdl_step = stepSdlModule(b, target, optimize);
+    return exe;
+}
+
+fn stepBuildOffline(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    sdl_module: *Build.Module,
+    sdl_step: *Build.Step,
+) *Build.Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = "tabletop",
+        .root_source_file = b.path("src/offline.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     exe.root_module.addImport("sdl", sdl_module);
     exe.step.dependOn(sdl_step);
 
@@ -58,13 +109,12 @@ fn stepBuildMain(
 fn stepBuildSdlTranslator(
     b: *Build,
     target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
 ) *Build.Step.Compile {
     const sdl_translator = b.addExecutable(.{
         .name = "sdl_header_translator",
         .root_source_file = b.path("utils/sdl_translator.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .Debug,
     });
     sdl_translator.linkSystemLibrary("SDL3");
     return sdl_translator;
@@ -73,9 +123,8 @@ fn stepBuildSdlTranslator(
 fn stepTranslateSdl(
     b: *Build,
     target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
 ) struct { *Build.Step, Build.LazyPath } {
-    const sdl_translator = stepBuildSdlTranslator(b, target, optimize);
+    const sdl_translator = stepBuildSdlTranslator(b, target);
     const translate = b.addRunArtifact(sdl_translator);
     const sdl_rename = translate.addOutputFileArg("sdl_rename.h");
     return .{
@@ -97,7 +146,7 @@ fn stepSdlModule(
     });
     sdl_module.linkSystemLibrary("SDL3", .{});
 
-    const translate_step, const sdl_rename = stepTranslateSdl(b, target, optimize);
+    const translate_step, const sdl_rename = stepTranslateSdl(b, target);
     sdl_module.addIncludePath(sdl_rename.dirname());
 
     return .{

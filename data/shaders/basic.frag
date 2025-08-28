@@ -7,4 +7,7 @@ layout(set = 2, binding = 0) uniform sampler2D texture_sampler;
 
 void main() {
     fragColor = texture(texture_sampler, inUV);
+    if (fragColor.a < 0.5) {
+        discard;
+    }
 }

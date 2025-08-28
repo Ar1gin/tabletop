@@ -123,7 +123,7 @@ pub fn Sway(comptime T: type) type {
             const sin = std.math.sin(dist);
             const cos = std.math.cos(dist);
             var len = length(@Vector(2, T){ self.value, self.velocity });
-            if(len < 0.001) {
+            if (len < 0.001) {
                 self.value = 0.001;
                 self.velocity = 0;
                 len = 0.001;
@@ -136,4 +136,32 @@ pub fn Sway(comptime T: type) type {
             self.velocity = new_velocity * mult;
         }
     };
+}
+
+pub fn raycast(
+    origin: @Vector(3, f32),
+    target: @Vector(3, f32),
+    plane: @Vector(4, f32),
+) @Vector(3, f32) {
+    @setFloatMode(.optimized);
+
+    const offset = target - origin;
+    const plane_dir = @Vector(3, f32){ plane[0], plane[1], plane[2] };
+    const dist = plane[3];
+    const dist_mod = dist / dot(plane_dir, plane_dir);
+    const num = dot(plane_dir, plane_dir * @as(@Vector(3, f32), @splat(dist_mod)) - origin);
+    var den = dot(offset, plane_dir);
+    if (@abs(den) < 0.0001) {
+        den = 0.0001;
+    }
+
+    return origin + offset * @as(@Vector(3, f32), @splat(num / den));
+}
+
+pub fn limit(vector: anytype, value: f32) @TypeOf(vector) {
+    const max = @reduce(.Max, vector);
+    if (max > value)
+        return vector * @as(@TypeOf(vector), @splat(value / max))
+    else
+        return vector;
 }
