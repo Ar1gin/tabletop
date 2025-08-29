@@ -52,16 +52,18 @@ pub fn to_screen(camera: Camera, position: Transform.Position) @Vector(2, f32) {
     return .{ x * wmod, y * wmod };
 }
 
-pub fn mouse_in_quad(camera: Camera, mouse: @Vector(2, f32), quad_transform: Transform) bool {
+pub fn mouse_in_quad(camera: Camera, mouse: @Vector(2, f32), quad_transform: Transform, width: f32, height: f32) bool {
     @setFloatMode(.optimized);
 
     const matrix = Transform.multiplyMatrix(camera.matrix, quad_transform.matrix());
 
+    const hw = width * 0.5;
+    const hh = height * 0.5;
     const pi: [4]@Vector(2, f32) = .{
-        .{ -0.5, -0.5 },
-        .{ -0.5, 0.5 },
-        .{ 0.5, 0.5 },
-        .{ 0.5, -0.5 },
+        .{ -hw, -hh },
+        .{ -hw,  hh },
+        .{  hw,  hh },
+        .{  hw, -hh },
     };
     var po: [4]@Vector(2, f32) = undefined;
     for (0..4) |i| {

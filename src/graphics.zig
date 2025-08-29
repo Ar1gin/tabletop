@@ -372,7 +372,7 @@ pub fn beginDraw() bool {
     // Window is probably hidden
     if (Graphics.render_target == null) return false;
 
-    Graphics.render_pass = sdl.BeginGPURenderPass(Graphics.command_buffer, &.{
+    Graphics.render_pass = sdl.BeginGPURenderPass(Graphics.command_buffer.?, &.{
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
         .cycle = false,
         .load_op = sdl.GPU_LOADOP_CLEAR,
@@ -396,11 +396,35 @@ pub fn beginDraw() bool {
     return true;
 }
 
-pub fn drawMesh(mesh: Mesh, texture: Assets.Texture, matrix: Transform.TMatrix) void {
+pub fn clearDepth() void {
+    sdl.EndGPURenderPass(Graphics.render_pass.?);
+
+    Graphics.render_pass = sdl.BeginGPURenderPass(Graphics.command_buffer.?, &.{
+        .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
+        .cycle = false,
+        .load_op = sdl.GPU_LOADOP_LOAD,
+        .store_op = sdl.GPU_STOREOP_STORE,
+        .mip_level = 0,
+        .texture = Graphics.fsaa_target,
+    }, 1, &.{
+        .clear_depth = 1.0,
+        .load_op = sdl.GPU_LOADOP_CLEAR,
+        .store_op = sdl.GPU_STOREOP_DONT_CARE,
+        .stencil_load_op = sdl.GPU_STOREOP_DONT_CARE,
+        .stencil_store_op = sdl.GPU_STOREOP_DONT_CARE,
+        .texture = Graphics.depth_texture,
+    }) orelse err.sdl();
+
+    sdl.BindGPUGraphicsPipeline(Graphics.render_pass, Graphics.pipeline);
+    sdl.BindGPUVertexBuffers(Graphics.render_pass, 0, &.{ .offset = 0, .buffer = Graphics.vertex_buffer }, 1);
+    sdl.PushGPUVertexUniformData(Graphics.command_buffer, 0, &Graphics.camera.matrix, 16 * 4);
+}
+
+pub fn drawMesh(mesh: Mesh, texture: Assets.Texture, transform: Transform) void {
     if (Graphics.render_pass == null) return;
     const asset_texture = Assets.get(texture) orelse return;
 
-    sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &matrix, 16 * 4);
+    sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &transform.matrix(), 16 * 4);
     sdl.BindGPUFragmentSamplers(Graphics.render_pass, 0, &sdl.GPUTextureSamplerBinding{
         .texture = asset_texture.texture,
         .sampler = asset_texture.sampler,
@@ -496,13 +520,15 @@ pub fn getHeight() u32 {
     return @max(1, Graphics.window_size[1]);
 }
 
-pub fn generatePlane(x0: f32, y0: f32, x1: f32, y1: f32) [30]f32 {
+pub fn generatePlane(x0: f32, y0: f32, x1: f32, y1: f32, w: f32, h: f32) [30]f32 {
+    const hw = w * 0.5;
+    const hh = h * 0.5;
     return .{
-        -0.5, -0.5, 0, x0, y1,
-        0.5,  0.5,  0, x1, y0,
-        -0.5, 0.5,  0, x0, y0,
-        0.5,  0.5,  0, x1, y0,
-        -0.5, -0.5, 0, x0, y1,
-        0.5,  -0.5, 0, x1, y1,
+        -hw, -hh, 0, x0, y1,
+        hw,  hh,  0, x1, y0,
+        -hw, hh,  0, x0, y0,
+        hw,  hh,  0, x1, y0,
+        -hw, -hh, 0, x0, y1,
+        hw,  -hh, 0, x1, y1,
     };
 }

@@ -11,40 +11,69 @@ const Order = i32;
 
 pub var object_map: std.AutoHashMapUnmanaged(Id, usize) = .{};
 pub var objects: std.ArrayListUnmanaged(Object) = .{};
+
 pub var plane_mesh: Graphics.Mesh = undefined;
 pub var cube_mesh: Graphics.Mesh = undefined;
 pub var table_mesh: Graphics.Mesh = undefined;
 pub var texture: Assets.Texture = undefined;
 pub var hand_texture: Assets.Texture = undefined;
+
 pub var camera_position: @Vector(2, f32) = @splat(0);
-pub var hover: ?Id = null;
 pub var hand_transform: Graphics.Transform = .{};
-pub var panning = false;
+pub var dock_transform: Graphics.Transform = .{};
 pub var zoom: i32 = 0;
+
+pub var hover: ?Id = null;
+pub var panning = false;
 pub var hand_objects: u32 = 0;
+pub var hand_scale: f32 = 0;
+pub var dock_objects: u32 = 0;
+pub var dock_last_width: f32 = 0;
+pub var dock_focused: bool = false;
+pub var dock_spacing: f32 = 0;
 pub var min_order: Order = undefined;
 pub var max_order: Order = undefined;
 
 const Object = struct {
     transform: Graphics.Transform = .{},
     target_transform: Graphics.Transform = .{},
-    scale: Graphics.Transform.Scale,
+    width: f32,
+    height: f32,
     mesh: Graphics.Mesh,
     texture: Assets.Texture,
     order: Order,
     id: Id,
     index: u32,
-    parent: enum {
-        none,
-        hand,
-    } = .none,
-    hand_index: u32 = 0,
+    parent: Parent = .none,
+    parent_index: u32 = 0,
     influence: f32 = 0,
 
+    const Parent = enum {
+        none,
+        hand,
+        dock,
+    };
+
+    pub fn reparent(self: *@This(), new_parent: Parent) void {
+        self.transform = self.drawingTransform();
+        self.influence = 0;
+        self.parent = new_parent;
+    }
     pub fn drawingTransform(self: @This()) Graphics.Transform {
-        var transform = self.transform;
-        transform.position += @as(@Vector(3, f32), @splat(self.influence)) * World.hand_transform.position;
-        return transform;
+        const transform = self.transform;
+        const parent_transform = switch (self.parent) {
+            .hand => World.hand_transform,
+            .dock => World.dock_transform,
+            else => return transform,
+        };
+        return Graphics.Transform.combineTransforms(
+            transform,
+            Graphics.Transform.lerpTransform(
+                .{},
+                parent_transform,
+                self.influence,
+            ),
+        );
     }
 };
 
@@ -52,13 +81,9 @@ const World = @This();
 pub fn initDebug() void {
     for (0..10) |i| {
         (World.objects.addOne(Game.alloc) catch err.oom()).* = .{
-            .scale = @splat(0.5),
-            .mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(
-                15.0 / 16.0,
-                @as(f32, @floatFromInt(i)) / 16.0,
-                16.0 / 16.0,
-                @as(f32, @floatFromInt(i + 1)) / 16.0,
-            ))),
+            .width = 0.5,
+            .height = 0.5,
+            .mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(15.0 / 16.0, @as(f32, @floatFromInt(i)) / 16.0, 16.0 / 16.0, @as(f32, @floatFromInt(i + 1)) / 16.0, 0.5, 0.5))),
             .texture = Assets.load(.texture, "data/yakuza.png"),
             .order = @intCast(i),
             .id = @intCast(i),
@@ -66,18 +91,24 @@ pub fn initDebug() void {
         };
         World.object_map.put(Game.alloc, @intCast(i), i) catch err.oom();
     }
+
     World.plane_mesh = Graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA));
     World.cube_mesh = Graphics.loadMesh(@ptrCast(&CUBE_MESH_DATA));
-    World.table_mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(0, 0, 0.5, 0.5)));
+    World.table_mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(0, 0, 0.5, 0.5, 8, 8)));
     World.texture = Assets.load(.texture, "data/yakuza.png");
     World.hand_texture = Assets.load(.texture, "data/hand.png");
+
     World.camera_position = @splat(0);
-    World.hover = null;
-    World.hand_transform = .{
-        .scale = @splat(0.5),
+    World.hand_transform = .{};
+    World.hand_scale = 0.5;
+    World.dock_transform = .{
+        .position = .{ 0, 0, 4 },
     };
-    World.panning = false;
+    World.dock_spacing = 0.2;
     World.zoom = 0;
+
+    World.panning = false;
+    World.dock_focused = false;
     World.min_order = 0;
     World.max_order = 9;
 }
@@ -97,16 +128,34 @@ pub fn deinit() void {
 }
 
 pub fn update(delta: f32) void {
+    World.updateCamera(delta);
+    {
+        World.dock_transform = Graphics.Transform.lerpTransformTimeLn(
+            World.dock_transform,
+            Graphics.Transform.combineTransforms(.{ .position = .{
+                0,
+                -1,
+                -1 / Graphics.camera.lens,
+            } }, Graphics.camera.transform),
+            delta,
+            -128,
+        );
+    }
+    {
+        const hand_target = Graphics.camera.raycast(.{ Game.mouse.x_norm, Game.mouse.y_norm }, .{ 0, 0, 1, 0 });
+        World.hand_transform.position = math.lerpTimeLn(
+            World.hand_transform.position,
+            hand_target + @Vector(3, f32){ 0, 0, 0.2 },
+            delta,
+            -24,
+        );
+    }
+
     World.updateOrder();
-    const hand_target = Graphics.camera.raycast(.{ Game.mouse.x_norm, Game.mouse.y_norm }, .{ 0, 0, 1, 0 });
-    World.hand_transform.position = math.lerpTimeLn(
-        World.hand_transform.position,
-        hand_target + @Vector(3, f32){ World.hand_transform.scale[0] * 0.5, -World.hand_transform.scale[1] * 0.5, 0.2 },
-        delta,
-        -24,
-    );
+
     World.hover = null;
     World.hand_objects = 0;
+    World.dock_objects = 0;
     for (World.objects.items) |*object| {
         updateHover(object);
     }
@@ -114,7 +163,6 @@ pub fn update(delta: f32) void {
         updateObject(object, delta);
     }
     World.updateControls();
-    World.updateCamera(delta);
 }
 
 pub fn updateControls() void {
@@ -151,46 +199,68 @@ pub fn updateControls() void {
         }
         World.zoom = std.math.clamp(World.zoom + Game.mouse.wheel, -4, 8);
     }
+    if (Game.mouse.y_norm <= -0.8) {
+        World.dock_focused = true;
+    }
+    if (Game.mouse.y_norm >= -0.6) {
+        World.dock_focused = false;
+    }
 }
 
 pub fn tryPick() bool {
     const hover_id = World.hover orelse return false;
     const object = World.getObject(hover_id) orelse return false;
     World.panning = false;
-    object.parent = .hand;
+    object.reparent(.hand);
     World.bringToTop(object);
     return true;
 }
 pub fn tryRelease() bool {
-    var last: ?*Object = null;
-    for (World.objects.items) |*object| {
-        if (object.parent != .hand) continue;
-        last = object;
-    }
-    if (last) |object| {
-        object.transform = object.drawingTransform();
-        object.target_transform.position = World.hand_transform.position + @Vector(3, f32){
-            -World.hand_transform.scale[0] * 0.5,
-            World.hand_transform.scale[1] * 0.5,
-            0,
-        };
-        object.influence = 0;
-        object.parent = .none;
-        return true;
-    }
-    return false;
+    const object = blk: {
+        var i = World.objects.items.len - 1;
+        while (true) {
+            const object = &World.objects.items[i];
+            if (object.parent == .hand) {
+                break :blk object;
+            }
+            if (i > 0)
+                i -= 1
+            else
+                return false;
+        }
+    };
+    object.target_transform.position = World.hand_transform.position;
+    World.bringToTop(object);
+    if (World.dock_focused)
+        object.reparent(.dock)
+    else
+        object.reparent(.none);
+    return true;
 }
 
 pub fn updateHover(object: *Object) void {
-    if (object.parent == .hand) {
-        object.hand_index = World.hand_objects;
-        World.hand_objects += 1;
-        return;
-    }
-    if (Graphics.camera.mouse_in_quad(.{ Game.mouse.x_norm, Game.mouse.y_norm }, object.target_transform)) {
-        if (World.hover == null or World.getObject(World.hover.?).?.index < object.index) {
-            World.hover = object.id;
-        }
+    switch (object.parent) {
+        .none => {
+            if (!World.dock_focused and Graphics.camera.mouse_in_quad(.{ Game.mouse.x_norm, Game.mouse.y_norm }, object.transform, object.width, object.height)) {
+                if (World.hover == null or World.getObject(World.hover.?).?.index < object.index) {
+                    World.hover = object.id;
+                }
+            }
+        },
+        .hand => {
+            object.parent_index = World.hand_objects;
+            World.hand_objects += 1;
+        },
+        .dock => {
+            object.parent_index = World.dock_objects;
+            World.dock_last_width = object.width * object.target_transform.scale;
+            World.dock_objects += 1;
+            if (World.dock_focused and Graphics.camera.mouse_in_quad(.{ Game.mouse.x_norm, Game.mouse.y_norm }, object.transform.combineTransforms(World.dock_transform), object.width, object.height)) {
+                if (World.hover == null or World.getObject(World.hover.?).?.index < object.index) {
+                    World.hover = object.id;
+                }
+            }
+        },
     }
 }
 
@@ -198,57 +268,85 @@ pub fn updateObject(object: *Object, delta: f32) void {
     switch (object.parent) {
         .none => {
             object.target_transform.position[2] = if (World.hover == object.id) @as(f32, 0.1) else @as(f32, 0.001) * @as(f32, @floatFromInt(object.index + 1));
-            object.target_transform.scale = object.scale;
+            object.target_transform.scale = 1.0;
         },
         .hand => {
             var target_position = @as(@Vector(3, f32), @splat(0));
-            var target_scale = object.scale;
+            var target_scale: f32 = 1.0;
             target_position[2] -= 0.001;
-            const hand_order = hand_objects - object.hand_index - 1;
+            const hand_order = hand_objects - object.parent_index - 1;
             switch (hand_order) {
-                0 => {
-                    target_position[0] -= World.hand_transform.scale[0] * 0.5;
-                    target_position[1] += World.hand_transform.scale[1] * 0.5;
-                },
+                0 => {},
                 else => |i| {
-                    target_position[0] += World.hand_transform.scale[0] * if (i & 2 == 0) @as(f32, 0.5) else @as(f32, 1);
-                    target_position[1] += World.hand_transform.scale[1] * if ((i - 1) & 2 == 0) @as(f32, 0.25) else @as(f32, -0.25);
+                    target_position[0] += World.hand_scale * if (i & 2 == 0) @as(f32, 1) else @as(f32, 1.5);
+                    target_position[1] += World.hand_scale * if ((i - 1) & 2 == 0) @as(f32, -0.25) else @as(f32, -0.75);
                     target_position[2] -= @as(f32, @floatFromInt((hand_order - 1) / 4)) * 0.001;
-                    target_scale = math.limit(target_scale, World.hand_transform.scale[1] * 0.5);
+                    target_scale = 0.5;
                 },
             }
             object.target_transform.position = target_position;
             object.target_transform.scale = target_scale;
         },
+        .dock => {
+            var topleft_x = -World.dock_last_width * 0.5 + World.dock_spacing * (@as(f32, @floatFromInt(object.parent_index)) - @as(f32, @floatFromInt(World.dock_objects - 1)) * 0.5);
+            const total_w = @as(f32, @floatFromInt(World.dock_objects - 1)) * World.dock_spacing + World.dock_last_width;
+            if (total_w > Graphics.camera.aspect * 2) {
+                topleft_x += math.lerp(0, Graphics.camera.aspect - total_w * 0.5, Game.mouse.x_norm);
+            }
+            const hit = World.hover == object.id;
+            const topleft_y = if (World.dock_focused) if (hit) @as(f32, 0.5) else @as(f32, 0.3) else @as(f32, 0.2);
+            object.target_transform.position = .{
+                topleft_x + object.width * 0.5 * object.target_transform.scale,
+                topleft_y - object.height * 0.5 * object.target_transform.scale,
+                if (hit) @as(f32, 0.02) else @as(f32, 0),
+            };
+            object.target_transform.rotation = if (hit)
+                Graphics.Transform.ZERO.rotation
+            else
+                Graphics.Transform.rotationByAxis(.{ 0, 1, 0 }, 0.001);
+        },
     }
-    if (object.parent == .hand) {
+    if (object.parent != .none) {
         object.influence = math.lerpTimeLn(
             object.influence,
             1.0,
             delta,
-            -8,
+            -24,
         );
     }
-    object.transform.position = math.lerpTimeLn(
-        object.transform.position,
-        object.target_transform.position,
+    object.transform = Graphics.Transform.lerpTransformTimeLn(
+        object.transform,
+        object.target_transform,
         delta,
-        -8,
-    );
-    object.transform.scale = math.lerpTimeLn(
-        object.transform.scale,
-        object.target_transform.scale,
-        delta,
-        -8,
+        -24,
     );
 }
 
 pub fn draw() void {
-    Graphics.drawMesh(World.table_mesh, World.texture, Graphics.Transform.matrix(.{ .scale = @splat(8) }));
+    Graphics.drawMesh(World.table_mesh, World.texture, .{});
+
     for (World.objects.items) |*object| {
-        Graphics.drawMesh(object.mesh, object.texture, object.drawingTransform().matrix());
+        if (object.parent != .dock)
+            Graphics.drawMesh(object.mesh, object.texture, object.drawingTransform());
     }
-    Graphics.drawMesh(World.plane_mesh, World.hand_texture, World.hand_transform.matrix());
+
+    Graphics.drawMesh(
+        World.plane_mesh,
+        World.hand_texture,
+        Graphics.Transform.combineTransforms(
+            .{
+                .position = .{ World.hand_scale * 0.5, -World.hand_scale * 0.5, 0 },
+                .scale = World.hand_scale,
+            },
+            World.hand_transform,
+        ),
+    );
+
+    Graphics.clearDepth();
+    for (World.objects.items) |*object| {
+        if (object.parent == .dock)
+            Graphics.drawMesh(object.mesh, object.texture, object.drawingTransform());
+    }
 }
 
 pub fn updateCamera(delta: f32) void {
@@ -380,4 +478,12 @@ const PLANE_MESH_DATA = [_]f32{
     0.5,  0.5,  0, 1.0, 0.0,
     -0.5, -0.5, 0, 0.0, 1.0,
     0.5,  -0.5, 0, 1.0, 1.0,
+};
+const PLANE_MESH_DATA_HALF = [_]f32{
+    -0.25, -0.25, 0, 0.0, 1.0,
+    0.25,  0.25,  0, 1.0, 0.0,
+    -0.25, 0.25,  0, 0.0, 0.0,
+    0.25,  0.25,  0, 1.0, 0.0,
+    -0.25, -0.25, 0, 0.0, 1.0,
+    0.25,  -0.25, 0, 1.0, 1.0,
 };

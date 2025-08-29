@@ -1,51 +1,39 @@
 const std = @import("std");
+const math = @import("../math.zig");
 const Transform = @This();
 
 pub const TMatrix = @Vector(16, f32);
 
 pub const Position = @Vector(3, f32);
 pub const Rotation = @Vector(4, f32);
-pub const Scale = @Vector(3, f32);
+pub const Scale = f32;
 
 position: Position = @splat(0.0),
 rotation: Rotation = .{ 1.0, 0.0, 0.0, 0.0 },
-scale: Scale = @splat(1.0),
+scale: Scale = 1.0,
 
 pub fn matrix(transform: Transform) TMatrix {
     @setFloatMode(.optimized);
 
-    const r = rotationMatrix(transform.rotation);
-    const sx, const sy, const sz = transform.scale;
+    const r = rotationMatrix(transform.rotation) * @as(@Vector(9, f32), @splat(transform.scale));
     return .{
-        sx * r[0], sy * r[1], sz * r[2], transform.position[0],
-        sx * r[3], sy * r[4], sz * r[5], transform.position[1],
-        sx * r[6], sy * r[7], sz * r[8], transform.position[2],
-        0.0,       0.0,       0.0,       1.0,
+        r[0], r[1], r[2], transform.position[0],
+        r[3], r[4], r[5], transform.position[1],
+        r[6], r[7], r[8], transform.position[2],
+        0.0,  0.0,  0.0,  1.0,
     };
 }
 
 pub fn inverseMatrix(transform: Transform) TMatrix {
     @setFloatMode(.optimized);
 
-    const r = rotationMatrix(flipRotation(transform.rotation));
+    const r = rotationMatrix(flipRotation(transform.rotation)) * @as(@Vector(9, f32), @splat(1.0 / transform.scale));
     const tx, const ty, const tz = transform.position;
-    const sx = 1.0 / transform.scale[0];
-    const sy = 1.0 / transform.scale[1];
-    const sz = 1.0 / transform.scale[2];
-    const r0 = r[0] * sx;
-    const r1 = r[1] * sx;
-    const r2 = r[2] * sx;
-    const r3 = r[3] * sy;
-    const r4 = r[4] * sy;
-    const r5 = r[5] * sy;
-    const r6 = r[6] * sz;
-    const r7 = r[7] * sz;
-    const r8 = r[8] * sz;
     return .{
-        r0,  r1,  r2,  -(r0 * tx + r1 * ty + r2 * tz),
-        r3,  r4,  r5,  -(r3 * tx + r4 * ty + r5 * tz),
-        r6,  r7,  r8,  -(r6 * tx + r7 * ty + r8 * tz),
-        0.0, 0.0, 0.0, 1.0,
+        r[0], r[1], r[2], -(r[0] * tx + r[1] * ty + r[2] * tz),
+        r[3], r[4], r[5], -(r[3] * tx + r[4] * ty + r[5] * tz),
+        r[6], r[7], r[8], -(r[6] * tx + r[7] * ty + r[8] * tz),
+        0.0,  0.0,  0.0,  1.0,
     };
 }
 
@@ -94,6 +82,7 @@ pub fn rotateVector(vector: Position, rotation: Rotation) Position {
 pub fn rotate(transform: *Transform, rotation: Rotation) void {
     @setFloatMode(.optimized);
 
+    // Also rotate `Position` around the origin?
     transform.rotation = normalizeRotation(combineRotations(transform.rotation, rotation));
 }
 
@@ -148,6 +137,8 @@ pub fn normalizeRotation(r: Rotation) Rotation {
     }
 }
 
+/// a: Child `Rotation`
+/// b: Parent `Rotation`
 pub fn combineRotations(a: Rotation, b: Rotation) Rotation {
     @setFloatMode(.optimized);
 
@@ -230,3 +221,31 @@ pub fn multiplyMatrix(a: TMatrix, b: TMatrix) TMatrix {
     }
     return output;
 }
+
+/// a: Child `Transform`
+/// b: Parent `Transform`
+pub fn combineTransforms(a: Transform, b: Transform) Transform {
+    @setFloatMode(.optimized);
+
+    return Transform{
+        .position = rotateVector(a.position, b.rotation) * @as(Position, @splat(b.scale)) + b.position,
+        .rotation = combineRotations(a.rotation, b.rotation),
+        .scale = a.scale * b.scale,
+    };
+}
+
+pub fn lerpTransformTimeLn(a: Transform, b: Transform, t: f32, lnf: f32) Transform {
+    return lerpTransform(b, a, @exp(lnf * t));
+}
+
+pub fn lerpTransform(a: Transform, b: Transform, f: f32) Transform {
+    @setFloatMode(.optimized);
+
+    return Transform{
+        .position = math.lerp(a.position, b.position, f),
+        .rotation = math.slerp(a.rotation, b.rotation, f),
+        .scale = math.lerp(a.scale, b.scale, f),
+    };
+}
+
+pub const ZERO = Transform{};

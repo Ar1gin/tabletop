@@ -36,15 +36,21 @@ pub inline fn slerpTime(a: anytype, b: anytype, t: f32, comptime f: f32) @TypeOf
 pub fn slerpTimeLn(a: anytype, b: anytype, t: f32, lnf: f32) @TypeOf(a, b) {
     @setFloatMode(.optimized);
 
+    return slerp(b, a, @exp(lnf * t));
+}
+
+pub fn slerp(a: anytype, b: anytype, f: f32) @TypeOf(a, b) {
+    @setFloatMode(.optimized);
+
     const cos = @reduce(.Add, a * b);
     if (cos > 0.999) {
-        return lerpTimeLn(a, b, t, lnf);
+        return lerp(a, b, f);
     }
 
     const angle = std.math.acos(cos);
 
-    const a_angle_factor = @exp(lnf * t);
-    const b_angle_factor = 1.0 - a_angle_factor;
+    const a_angle_factor = 1 - f;
+    const b_angle_factor = f;
 
     const rev_angle_sin = 1.0 / std.math.sin(angle);
     const a_sin = std.math.sin(a_angle_factor * angle);
@@ -164,4 +170,15 @@ pub fn limit(vector: anytype, value: f32) @TypeOf(vector) {
         return vector * @as(@TypeOf(vector), @splat(value / max))
     else
         return vector;
+}
+
+pub fn norm(vector: anytype) @TypeOf(vector) {
+    const len = length(vector);
+    if (len < 1.01 and len > 0.99) return vector;
+    if (len < 1e-10) {
+        var output = @as(@TypeOf(vector), @splat(0));
+        output[@typeInfo(@TypeOf(vector)).vector.len - 1] = 1;
+        return output;
+    }
+    return vector * @as(@TypeOf(vector), @splat(1.0 / len));
 }
