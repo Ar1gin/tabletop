@@ -62,6 +62,7 @@ pub fn run() void {
             World.draw();
             Game.endDraw();
         }
+        Assets.update();
     }
 }
 

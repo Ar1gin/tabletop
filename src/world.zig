@@ -91,6 +91,7 @@ pub fn initDebug() void {
         };
         World.object_map.put(Game.alloc, @intCast(i), i) catch err.oom();
     }
+    Assets.free(Assets.load(.texture, "data/yakuza.png"));
 
     World.plane_mesh = Graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA));
     World.cube_mesh = Graphics.loadMesh(@ptrCast(&CUBE_MESH_DATA));
@@ -323,16 +324,16 @@ pub fn updateObject(object: *Object, delta: f32) void {
 }
 
 pub fn draw() void {
-    Graphics.drawMesh(World.table_mesh, World.texture, .{});
+    Graphics.drawMesh(World.table_mesh, &World.texture, .{});
 
     for (World.objects.items) |*object| {
         if (object.parent != .dock)
-            Graphics.drawMesh(object.mesh, object.texture, object.drawingTransform());
+            Graphics.drawMesh(object.mesh, &object.texture, object.drawingTransform());
     }
 
     Graphics.drawMesh(
         World.plane_mesh,
-        World.hand_texture,
+        &World.hand_texture,
         Graphics.Transform.combineTransforms(
             .{
                 .position = .{ World.hand_scale * 0.5, -World.hand_scale * 0.5, 0 },
@@ -345,7 +346,7 @@ pub fn draw() void {
     Graphics.clearDepth();
     for (World.objects.items) |*object| {
         if (object.parent == .dock)
-            Graphics.drawMesh(object.mesh, object.texture, object.drawingTransform());
+            Graphics.drawMesh(object.mesh, &object.texture, object.drawingTransform());
     }
 }
 

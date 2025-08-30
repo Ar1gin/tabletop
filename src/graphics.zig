@@ -420,9 +420,9 @@ pub fn clearDepth() void {
     sdl.PushGPUVertexUniformData(Graphics.command_buffer, 0, &Graphics.camera.matrix, 16 * 4);
 }
 
-pub fn drawMesh(mesh: Mesh, texture: Assets.Texture, transform: Transform) void {
+pub fn drawMesh(mesh: Mesh, texture: *Assets.Texture, transform: Transform) void {
     if (Graphics.render_pass == null) return;
-    const asset_texture = Assets.get(texture) orelse return;
+    const asset_texture = texture.get() orelse return;
 
     sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &transform.matrix(), 16 * 4);
     sdl.BindGPUFragmentSamplers(Graphics.render_pass, 0, &sdl.GPUTextureSamplerBinding{
