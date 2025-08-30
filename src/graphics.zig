@@ -12,8 +12,8 @@ pub const Mesh = struct {
     vertex_count: usize,
 };
 
-var window: *sdl.Window = undefined;
-var device: *sdl.GPUDevice = undefined;
+pub var window: *sdl.Window = undefined;
+pub var device: *sdl.GPUDevice = undefined;
 /// Only available while drawing
 var command_buffer: ?*sdl.GPUCommandBuffer = null;
 var render_pass: ?*sdl.GPURenderPass = null;
@@ -43,10 +43,10 @@ var to_resize: ?[2]u32 = null;
 
 const VERTEX_BUFFER_DEFAULT_CAPACITY = 1024;
 const VERTEX_BUFFER_GROWTH_MULTIPLIER = 2;
-const TRANSFER_BUFFER_DEFAULT_CAPACITY = 4096 * 1024;
 const BYTES_PER_VERTEX = 5 * 4;
 const DEPTH_FORMAT = sdl.GPU_TEXTUREFORMAT_D32_FLOAT;
-const MIP_LEVEL = 4;
+pub const TRANSFER_BUFFER_DEFAULT_CAPACITY = 256 * 1024;
+pub const MIP_LEVEL = 4;
 
 const Graphics = @This();
 pub fn create() void {
@@ -198,69 +198,6 @@ pub fn destroy() void {
         Graphics.command_buffer = null;
     }
     sdl.DestroyGPUDevice(Graphics.device);
-}
-
-pub fn loadTexture(width: u32, height: u32, texture_bytes: []const u8) struct { *sdl.GPUTexture, *sdl.GPUSampler } {
-    const target_format = sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-
-    const texture = Graphics.createTexture(
-        width,
-        height,
-        target_format,
-        sdl.GPU_TEXTUREUSAGE_SAMPLER | sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
-        MIP_LEVEL,
-    );
-
-    const temp_command_buffer = sdl.AcquireGPUCommandBuffer(Graphics.device) orelse err.sdl();
-    {
-        const copy_pass = sdl.BeginGPUCopyPass(temp_command_buffer) orelse err.sdl();
-        defer sdl.EndGPUCopyPass(copy_pass);
-
-        const map: [*]u8 = @ptrCast(sdl.MapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer, true) orelse err.sdl());
-        @memcpy(map, texture_bytes);
-        sdl.UnmapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer);
-
-        sdl.UploadToGPUTexture(copy_pass, &sdl.GPUTextureTransferInfo{
-            .offset = 0,
-            .pixels_per_row = width,
-            .rows_per_layer = height,
-            .transfer_buffer = Graphics.transfer_buffer,
-        }, &sdl.GPUTextureRegion{
-            .texture = texture,
-            .mip_level = 0,
-            .layer = 0,
-            .x = 0,
-            .y = 0,
-            .z = 0,
-            .w = width,
-            .h = height,
-            .d = 1,
-        }, false);
-    }
-    sdl.GenerateMipmapsForGPUTexture(temp_command_buffer, texture);
-    if (!sdl.SubmitGPUCommandBuffer(temp_command_buffer)) err.sdl();
-
-    const sampler = sdl.CreateGPUSampler(Graphics.device, &sdl.GPUSamplerCreateInfo{
-        .address_mode_u = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
-        .address_mode_v = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
-        .address_mode_w = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
-        .mag_filter = sdl.GPU_FILTER_NEAREST,
-        .min_filter = sdl.GPU_FILTER_LINEAR,
-        .mipmap_mode = sdl.GPU_SAMPLERMIPMAPMODE_LINEAR,
-        .min_lod = 0,
-        .max_lod = 16,
-        .mip_lod_bias = -2,
-    }) orelse err.sdl();
-
-    return .{
-        texture,
-        sampler,
-    };
-}
-
-pub fn unloadTexture(texture: *sdl.GPUTexture, sampler: *sdl.GPUSampler) void {
-    sdl.ReleaseGPUSampler(Graphics.device, sampler);
-    sdl.ReleaseGPUTexture(Graphics.device, texture);
 }
 
 pub fn loadMesh(mesh_bytes: []const u8) Mesh {
@@ -471,7 +408,7 @@ fn loadShader(path: []const u8, info: sdl.GPUShaderCreateInfo) *sdl.GPUShader {
     return sdl.CreateGPUShader(device, &updated_info) orelse err.sdl();
 }
 
-fn createTexture(width: u32, height: u32, format: c_uint, usage: c_uint, mip_level: u32) *sdl.GPUTexture {
+pub fn createTexture(width: u32, height: u32, format: c_uint, usage: c_uint, mip_level: u32) *sdl.GPUTexture {
     return sdl.CreateGPUTexture(device, &.{
         .format = format,
         .layer_count_or_depth = 1,
@@ -481,6 +418,28 @@ fn createTexture(width: u32, height: u32, format: c_uint, usage: c_uint, mip_lev
         .sample_count = sdl.GPU_SAMPLECOUNT_1,
         .usage = usage,
     }) orelse err.sdl();
+}
+
+pub fn freeTexture(texture: *sdl.GPUTexture) void {
+    sdl.ReleaseGPUTexture(Graphics.device, texture);
+}
+
+pub fn createSampler() *sdl.GPUSampler {
+    return sdl.CreateGPUSampler(Graphics.device, &sdl.GPUSamplerCreateInfo{
+        .address_mode_u = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .address_mode_v = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .address_mode_w = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .mag_filter = sdl.GPU_FILTER_NEAREST,
+        .min_filter = sdl.GPU_FILTER_LINEAR,
+        .mipmap_mode = sdl.GPU_SAMPLERMIPMAPMODE_LINEAR,
+        .min_lod = 0,
+        .max_lod = 16,
+        .mip_lod_bias = -2,
+    }) orelse err.sdl();
+}
+
+pub fn freeSampler(sampler: *sdl.GPUSampler) void {
+    sdl.ReleaseGPUSampler(Graphics.device, sampler);
 }
 
 fn resetTextures(width: u32, height: u32) void {

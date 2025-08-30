@@ -47,6 +47,9 @@ const AssetContext = struct {
 
 pub const LoadError = error{
     DependencyError,
+    ParsingError,
+    SdlError,
+    FileTooBig,
 } || std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError;
 
 pub const AssetType = enum {
@@ -129,8 +132,11 @@ pub fn AssetContainer(comptime T: type) type {
                     // TODO: Do something else while the asset is locked?
                     self.asset_pointer.mutex.lock();
                     defer self.asset_pointer.mutex.unlock();
-                    self.asset_pointer.load(Game.alloc);
                     self.last_state = self.asset_pointer.state;
+                    if (self.last_state == .not_loaded) {
+                        self.asset_pointer.load(Game.alloc);
+                        self.last_state = self.asset_pointer.state;
+                    }
                     if (self.last_state == .loaded) {
                         self.data_pointer = @alignCast(@ptrCast(self.asset_pointer.data));
                     }
