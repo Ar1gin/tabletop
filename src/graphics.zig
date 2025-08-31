@@ -424,7 +424,7 @@ pub fn freeTexture(texture: *sdl.GPUTexture) void {
     sdl.ReleaseGPUTexture(Graphics.device, texture);
 }
 
-pub fn createSampler() *sdl.GPUSampler {
+pub fn createSampler(mip_level: u32) *sdl.GPUSampler {
     return sdl.CreateGPUSampler(Graphics.device, &sdl.GPUSamplerCreateInfo{
         .address_mode_u = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
         .address_mode_v = sdl.GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
@@ -433,8 +433,8 @@ pub fn createSampler() *sdl.GPUSampler {
         .min_filter = sdl.GPU_FILTER_LINEAR,
         .mipmap_mode = sdl.GPU_SAMPLERMIPMAPMODE_LINEAR,
         .min_lod = 0,
-        .max_lod = 16,
-        .mip_lod_bias = -2,
+        .max_lod = @floatFromInt(mip_level - 1),
+        .mip_lod_bias = -0.5,
     }) orelse err.sdl();
 }
 

@@ -200,7 +200,8 @@ pub fn update() void {
     while (Assets.free_board.pop()) |request| {
         if (@atomicLoad(usize, &request.counter, .monotonic) == 0) {
             if (!Assets.asset_map.remove(.{ .type = request.type, .path = request.path })) continue;
-            request.unload(Game.alloc);
+            if (request.state == .loaded)
+                request.unload(Game.alloc);
             Game.alloc.destroy(request);
         }
     }

@@ -94,7 +94,6 @@ pub fn initDebug() void {
     Assets.free(Assets.load(.texture, "data/yakuza.png"));
 
     World.plane_mesh = Graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA));
-    World.cube_mesh = Graphics.loadMesh(@ptrCast(&CUBE_MESH_DATA));
     World.table_mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(0, 0, 0.5, 0.5, 8, 8)));
     World.texture = Assets.load(.texture, "data/yakuza.png");
     World.hand_texture = Assets.load(.texture, "data/hand.png");
@@ -116,7 +115,6 @@ pub fn initDebug() void {
 
 pub fn deinit() void {
     Graphics.unloadMesh(World.plane_mesh);
-    Graphics.unloadMesh(World.cube_mesh);
     Graphics.unloadMesh(World.table_mesh);
     Assets.free(World.texture);
     Assets.free(World.hand_texture);
@@ -425,11 +423,9 @@ fn updateOrder() void {
     }
 }
 
-const CUBEMAP_MESH_DATA = CUBE_MESH_DATA;
-
 const T1 = 1.0 / 3.0;
 const T2 = 2.0 / 3.0;
-const CUBE_MESH_DATA = [_]f32{
+const CUBEMAP_MESH_DATA = [_]f32{
     -0.5, 0.5,  -0.5, T2,  0,
     -0.5, -0.5, -0.5, T2,  0.5,
     0.5,  0.5,  -0.5, 1,   0,

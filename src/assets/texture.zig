@@ -11,6 +11,7 @@ sampler: *sdl.GPUSampler,
 pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This() {
     _ = alloc;
     var file = Assets.load(.file, path);
+    defer Assets.free(file);
     const data = (file.getSync() catch return error.DependencyError).bytes;
 
     var width: u32 = undefined;
@@ -24,7 +25,6 @@ pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This()
         @ptrCast(&channels),
         4,
     );
-    Assets.free(file);
     if (image == null) return error.ParsingError;
     defer c.stbi_image_free(image);
     const image_slice = image[0..@intCast(width * height * channels)];
@@ -33,13 +33,14 @@ pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This()
 
     const target_format = sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
     const bytes_per_pixel = 4;
+    const mip_level = if(std.math.isPowerOfTwo(width) and width == height) @as(u32, Graphics.MIP_LEVEL) else @as(u32, 1);
 
     const texture = Graphics.createTexture(
         width,
         height,
         target_format,
         sdl.GPU_TEXTUREUSAGE_SAMPLER | sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
-        Graphics.MIP_LEVEL,
+        mip_level,
     );
     errdefer Graphics.freeTexture(texture);
 
@@ -83,7 +84,7 @@ pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This()
             }, false);
         }
         rows_uploaded += rows_to_upload;
-        if (rows_to_upload == height) {
+        if (rows_uploaded == height) {
             sdl.GenerateMipmapsForGPUTexture(command_buffer, texture);
         }
         const fence = sdl.SubmitGPUCommandBufferAndAcquireFence(command_buffer) orelse return error.SdlError;
@@ -91,7 +92,7 @@ pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This()
         if (!sdl.WaitForGPUFences(Graphics.device, true, &fence, 1)) return error.SdlError;
     }
 
-    const sampler = Graphics.createSampler();
+    const sampler = Graphics.createSampler(mip_level);
 
     return .{
         .texture = texture,
