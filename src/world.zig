@@ -12,10 +12,10 @@ const Order = i32;
 pub var object_map: std.AutoHashMapUnmanaged(Id, usize) = .{};
 pub var objects: std.ArrayListUnmanaged(Object) = .{};
 
-pub var plane_mesh: Graphics.Mesh = undefined;
+pub var hand_mesh: Graphics.Mesh = undefined;
 pub var cube_mesh: Graphics.Mesh = undefined;
 pub var table_mesh: Graphics.Mesh = undefined;
-pub var texture: Assets.Texture = undefined;
+pub var table_texture: Assets.Texture = undefined;
 pub var hand_texture: Assets.Texture = undefined;
 
 pub var camera_position: @Vector(2, f32) = @splat(0);
@@ -34,7 +34,12 @@ pub var dock_spacing: f32 = 0;
 pub var min_order: Order = undefined;
 pub var max_order: Order = undefined;
 
+const DOCK_TILT = 0.03;
+const DOCK_TILT_SIN = std.math.sin(DOCK_TILT);
+const DOCK_TILT_COS = std.math.cos(DOCK_TILT);
+
 const Object = struct {
+    type: Type,
     transform: Graphics.Transform = .{},
     target_transform: Graphics.Transform = .{},
     width: f32,
@@ -44,14 +49,21 @@ const Object = struct {
     order: Order,
     id: Id,
     index: u32,
+    z: u32 = 0,
     parent: Parent = .none,
     parent_index: u32 = 0,
+    child_last_id: u32 = 0,
     influence: f32 = 0,
 
-    const Parent = enum {
+    const Type = enum {
+        card,
+        deck,
+    };
+    const Parent = union(enum) {
         none,
         hand,
         dock,
+        deck: Id,
     };
 
     pub fn reparent(self: *@This(), new_parent: Parent) void {
@@ -64,7 +76,8 @@ const Object = struct {
         const parent_transform = switch (self.parent) {
             .hand => World.hand_transform,
             .dock => World.dock_transform,
-            else => return transform,
+            .deck => |deck| if (World.getObject(deck)) |object| object.drawingTransform() else Graphics.Transform{},
+            .none => return transform,
         };
         return Graphics.Transform.combineTransforms(
             transform,
@@ -80,22 +93,48 @@ const Object = struct {
 const World = @This();
 pub fn initDebug() void {
     for (0..10) |i| {
-        (World.objects.addOne(Game.alloc) catch err.oom()).* = .{
+        World.objects.append(Game.alloc, .{
+            .type = .card,
             .width = 0.5,
             .height = 0.5,
-            .mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(15.0 / 16.0, @as(f32, @floatFromInt(i)) / 16.0, 16.0 / 16.0, @as(f32, @floatFromInt(i + 1)) / 16.0, 0.5, 0.5))),
+            .mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(
+                15.0 / 16.0,
+                @as(f32, @floatFromInt(i)) / 16.0,
+                16.0 / 16.0,
+                @as(f32, @floatFromInt(i + 1)) / 16.0,
+                0.5,
+                0.5,
+            ))),
             .texture = Assets.load(.texture, "data/yakuza.png"),
             .order = @intCast(i),
             .id = @intCast(i),
             .index = @intCast(i),
-        };
+            .parent = .{ .deck = 10 },
+        }) catch err.oom();
         World.object_map.put(Game.alloc, @intCast(i), i) catch err.oom();
     }
-    Assets.free(Assets.load(.texture, "data/yakuza.png"));
+    World.objects.append(Game.alloc, .{
+        .type = .deck,
+        .width = 1,
+        .height = 1,
+        .mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(
+            0.0 / 8.0,
+            4.0 / 8.0,
+            1.0 / 8.0,
+            5.0 / 8.0,
+            1,
+            1,
+        ))),
+        .texture = Assets.load(.texture, "data/yakuza.png"),
+        .order = 10,
+        .id = 10,
+        .index = 10,
+    }) catch err.oom();
+    World.object_map.put(Game.alloc, 10, 10) catch err.oom();
 
-    World.plane_mesh = Graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA));
     World.table_mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(0, 0, 0.5, 0.5, 8, 8)));
-    World.texture = Assets.load(.texture, "data/yakuza.png");
+    World.hand_mesh = Graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA));
+    World.table_texture = Assets.load(.texture, "data/yakuza.png");
     World.hand_texture = Assets.load(.texture, "data/hand.png");
 
     World.camera_position = @splat(0);
@@ -110,13 +149,13 @@ pub fn initDebug() void {
     World.panning = false;
     World.dock_focused = false;
     World.min_order = 0;
-    World.max_order = 9;
+    World.max_order = 10;
 }
 
 pub fn deinit() void {
-    Graphics.unloadMesh(World.plane_mesh);
     Graphics.unloadMesh(World.table_mesh);
-    Assets.free(World.texture);
+    Graphics.unloadMesh(World.hand_mesh);
+    Assets.free(World.table_texture);
     Assets.free(World.hand_texture);
     for (World.objects.items) |*object| {
         Assets.free(object.texture);
@@ -166,7 +205,6 @@ pub fn update(delta: f32) void {
 
 pub fn updateControls() void {
     if (Game.keyboard.keys.is_pressed(sdl.SDL_SCANCODE_LSHIFT)) {
-        if (Game.mouse.buttons.is_just_pressed(sdl.BUTTON_LEFT)) World.panning = true;
         if (Game.mouse.wheel > 0 and World.hand_objects > 0) {
             var left_to_scroll = @rem(Game.mouse.wheel, @as(i32, @intCast(World.hand_objects)));
             var i = World.objects.items.len - 1;
@@ -190,13 +228,13 @@ pub fn updateControls() void {
             }
         }
     } else {
-        if (Game.mouse.buttons.is_just_pressed(sdl.BUTTON_LEFT)) {
-            World.panning = !World.tryPick();
-        }
-        if (Game.mouse.buttons.is_just_pressed(sdl.BUTTON_RIGHT)) {
-            _ = World.tryRelease();
-        }
         World.zoom = std.math.clamp(World.zoom + Game.mouse.wheel, -4, 8);
+    }
+    if (Game.mouse.buttons.is_just_pressed(sdl.BUTTON_LEFT)) {
+        World.panning = !World.tryPick();
+    }
+    if (Game.mouse.buttons.is_just_pressed(sdl.BUTTON_RIGHT)) {
+        _ = World.tryRelease();
     }
     if (Game.mouse.y_norm <= -0.8) {
         World.dock_focused = true;
@@ -208,7 +246,19 @@ pub fn updateControls() void {
 
 pub fn tryPick() bool {
     const hover_id = World.hover orelse return false;
-    const object = World.getObject(hover_id) orelse return false;
+    var object = World.getObject(hover_id) orelse return false;
+    switch (object.type) {
+        .card => {},
+        .deck => {
+            if (!Game.keyboard.keys.is_pressed(sdl.SDL_SCANCODE_LSHIFT)) {
+                for (World.objects.items) |*child| {
+                    if (child.parent == .deck and child.parent.deck == object.id and child.id == object.child_last_id) {
+                        object = child;
+                    }
+                }
+            }
+        },
+    }
     World.panning = false;
     object.reparent(.hand);
     World.bringToTop(object);
@@ -230,18 +280,35 @@ pub fn tryRelease() bool {
     };
     object.target_transform.position = World.hand_transform.position;
     World.bringToTop(object);
-    if (World.dock_focused)
-        object.reparent(.dock)
-    else
+    if (!Game.keyboard.keys.is_pressed(sdl.SDL_SCANCODE_LSHIFT)) {
+        if (World.hover) |hover_id| {
+            if (World.getObject(hover_id)) |hover_object| {
+                if (hover_object.type == .deck) {
+                    object.reparent(.{ .deck = hover_id });
+                    return true;
+                }
+            }
+        }
+    }
+    if (World.dock_focused) {
+        object.reparent(.dock);
+        return true;
+    } else {
         object.reparent(.none);
-    return true;
+        return true;
+    }
 }
 
 pub fn updateHover(object: *Object) void {
     switch (object.parent) {
+        .deck => |id| {
+            if (World.getObject(id)) |deck| {
+                deck.child_last_id = object.id;
+            }
+        },
         .none => {
-            if (!World.dock_focused and Graphics.camera.mouse_in_quad(.{ Game.mouse.x_norm, Game.mouse.y_norm }, object.transform, object.width, object.height)) {
-                if (World.hover == null or World.getObject(World.hover.?).?.index < object.index) {
+            if (!World.dock_focused and Graphics.camera.mouse_in_quad(.{ Game.mouse.x_norm, Game.mouse.y_norm }, object.drawingTransform(), object.width, object.height)) {
+                if (World.hover == null or World.getObject(World.hover.?).?.z < object.z) {
                     World.hover = object.id;
                 }
             }
@@ -255,7 +322,7 @@ pub fn updateHover(object: *Object) void {
             World.dock_last_width = object.width * object.target_transform.scale;
             World.dock_objects += 1;
             if (World.dock_focused and Graphics.camera.mouse_in_quad(.{ Game.mouse.x_norm, Game.mouse.y_norm }, object.transform.combineTransforms(World.dock_transform), object.width, object.height)) {
-                if (World.hover == null or World.getObject(World.hover.?).?.index < object.index) {
+                if (World.hover == null or World.getObject(World.hover.?).?.z < object.z) {
                     World.hover = object.id;
                 }
             }
@@ -266,8 +333,8 @@ pub fn updateHover(object: *Object) void {
 pub fn updateObject(object: *Object, delta: f32) void {
     switch (object.parent) {
         .none => {
-            object.target_transform.position[2] = if (World.hover == object.id) @as(f32, 0.1) else @as(f32, 0.001) * @as(f32, @floatFromInt(object.index + 1));
-            object.target_transform.scale = 1.0;
+            object.target_transform.position[2] = @as(f32, 0.001) * @as(f32, @floatFromInt(object.index + 1));
+            object.target_transform.scale = if (World.hover == object.id) @as(f32, 1.1) else @as(f32, 1);
         },
         .hand => {
             var target_position = @as(@Vector(3, f32), @splat(0));
@@ -287,24 +354,32 @@ pub fn updateObject(object: *Object, delta: f32) void {
             object.target_transform.scale = target_scale;
         },
         .dock => {
-            var topleft_x = -World.dock_last_width * 0.5 + World.dock_spacing * (@as(f32, @floatFromInt(object.parent_index)) - @as(f32, @floatFromInt(World.dock_objects - 1)) * 0.5);
-            const total_w = @as(f32, @floatFromInt(World.dock_objects - 1)) * World.dock_spacing + World.dock_last_width;
+            var topleft_x = -World.dock_last_width * 0.5 * DOCK_TILT_COS + World.dock_spacing * (@as(f32, @floatFromInt(object.parent_index)) - @as(f32, @floatFromInt(World.dock_objects - 1)) * 0.5);
+            const total_w = @as(f32, @floatFromInt(World.dock_objects - 1)) * World.dock_spacing + World.dock_last_width * DOCK_TILT_COS;
             if (total_w > Graphics.camera.aspect * 2) {
                 topleft_x += math.lerp(0, Graphics.camera.aspect - total_w * 0.5, Game.mouse.x_norm);
             }
             const hit = World.hover == object.id;
             const topleft_y = if (World.dock_focused) if (hit) @as(f32, 0.5) else @as(f32, 0.3) else @as(f32, 0.2);
             object.target_transform.position = .{
-                topleft_x + object.width * 0.5 * object.target_transform.scale,
+                topleft_x + object.width * 0.5 * object.target_transform.scale * DOCK_TILT_COS,
                 topleft_y - object.height * 0.5 * object.target_transform.scale,
-                if (hit) @as(f32, 0.02) else @as(f32, 0),
+                if (hit) @as(f32, 0.02) else -object.width * 0.5 * DOCK_TILT_SIN,
             };
             object.target_transform.rotation = if (hit)
                 Graphics.Transform.ZERO.rotation
             else
-                Graphics.Transform.rotationByAxis(.{ 0, 1, 0 }, 0.001);
+                Graphics.Transform.rotationByAxis(.{ 0, 1, 0 }, DOCK_TILT);
+        },
+        .deck => {
+            object.target_transform.position = .{ 0, 0, @as(f32, 0.001) };
+            object.target_transform.scale = if (World.hover == object.id) @as(f32, 1.1) else @as(f32, 1);
         },
     }
+    object.z = switch (object.parent) {
+        .deck => |deck_id| if (World.getObject(deck_id)) |deck| deck.z + object.index else object.index,
+        .none, .hand, .dock => object.index,
+    };
     if (object.parent != .none) {
         object.influence = math.lerpTimeLn(
             object.influence,
@@ -322,15 +397,25 @@ pub fn updateObject(object: *Object, delta: f32) void {
 }
 
 pub fn draw() void {
-    Graphics.drawMesh(World.table_mesh, &World.texture, .{});
+    Graphics.drawMesh(World.table_mesh, &World.table_texture, .{});
 
     for (World.objects.items) |*object| {
-        if (object.parent != .dock)
-            Graphics.drawMesh(object.mesh, &object.texture, object.drawingTransform());
+        sw: switch (object.parent) {
+            .none, .hand => {
+                Graphics.drawMesh(object.mesh, &object.texture, object.drawingTransform());
+            },
+            .dock => {},
+            .deck => |id| {
+                if (World.getObject(id)) |deck| {
+                    if (deck.child_last_id != object.id) continue;
+                }
+                continue :sw .none;
+            },
+        }
     }
 
     Graphics.drawMesh(
-        World.plane_mesh,
+        World.hand_mesh,
         &World.hand_texture,
         Graphics.Transform.combineTransforms(
             .{
