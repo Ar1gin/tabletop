@@ -84,7 +84,7 @@ pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This()
             }, false);
         }
         rows_uploaded += rows_to_upload;
-        if (rows_uploaded == height) {
+        if (rows_uploaded == height and mip_level > 1) {
             sdl.GenerateMipmapsForGPUTexture(command_buffer, texture);
         }
         const fence = sdl.SubmitGPUCommandBufferAndAcquireFence(command_buffer) orelse return error.SdlError;
