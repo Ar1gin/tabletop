@@ -33,13 +33,12 @@ var depth_texture: *sdl.GPUTexture = undefined;
 var fsaa_target: *sdl.GPUTexture = undefined;
 var pipeline: *sdl.GPUGraphicsPipeline = undefined;
 
-var window_size: [2]u32 = undefined;
+pub var window_width: u32 = undefined;
+pub var window_height: u32 = undefined;
 var fsaa_scale: u32 = 4;
 var fsaa_level: u32 = 3;
 
 pub var camera: Camera = undefined;
-
-var to_resize: ?[2]u32 = null;
 
 const VERTEX_BUFFER_DEFAULT_CAPACITY = 1024;
 const VERTEX_BUFFER_GROWTH_MULTIPLIER = 2;
@@ -62,7 +61,6 @@ pub fn create() void {
         900,
         sdl.WINDOW_VULKAN | sdl.WINDOW_RESIZABLE,
     ) orelse err.sdl();
-    Graphics.window_size = .{ 1600, 900 };
 
     // Device
     Graphics.device = sdl.CreateGPUDevice(
@@ -111,20 +109,18 @@ pub fn create() void {
     if (target_format == sdl.GPU_TEXTUREFORMAT_INVALID) err.sdl();
 
     // TODO: Clean
-    var window_width: c_int = 1;
-    var window_height: c_int = 1;
-    if (!sdl.GetWindowSizeInPixels(Graphics.window, &window_width, &window_height)) err.sdl();
+    if (!sdl.GetWindowSizeInPixels(Graphics.window, @ptrCast(&Graphics.window_width), @ptrCast(&Graphics.window_height))) err.sdl();
 
     Graphics.depth_texture = createTexture(
-        @as(u32, @intCast(window_width)) * Graphics.fsaa_scale,
-        @as(u32, @intCast(window_height)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(Graphics.window_width)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(Graphics.window_height)) * Graphics.fsaa_scale,
         DEPTH_FORMAT,
         sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
         1,
     );
     Graphics.fsaa_target = createTexture(
-        @as(u32, @intCast(window_width)) * Graphics.fsaa_scale,
-        @as(u32, @intCast(window_height)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(Graphics.window_width)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(Graphics.window_height)) * Graphics.fsaa_scale,
         target_format,
         sdl.GPU_TEXTUREUSAGE_COLOR_TARGET | sdl.GPU_TEXTUREUSAGE_SAMPLER,
         fsaa_level,
@@ -296,18 +292,19 @@ fn growVertexBuffer(new_size: usize) void {
 /// Otherwise `command_buffer` and `render_pass` are both set
 pub fn beginDraw() bool {
     Graphics.command_buffer = sdl.AcquireGPUCommandBuffer(Graphics.device) orelse err.sdl();
-    if (Graphics.to_resize) |new_size| {
-        Graphics.resetTextures(new_size[0], new_size[1]);
-        Graphics.camera.aspect = @as(f32, @floatFromInt(new_size[0])) / @as(f32, @floatFromInt(new_size[1]));
-        Graphics.window_size = new_size;
-        Graphics.to_resize = null;
-    }
 
     var width: u32 = 0;
     var height: u32 = 0;
     if (!sdl.WaitAndAcquireGPUSwapchainTexture(Graphics.command_buffer, Graphics.window, &Graphics.render_target, &width, &height)) err.sdl();
     // Window is probably hidden
-    if (Graphics.render_target == null) return false;
+    if (Graphics.render_target == null or width == 0 or height == 0) return false;
+
+    if (width != Graphics.window_width or height != Graphics.window_height) {
+        Graphics.resetTextures(width, height);
+        Graphics.camera.aspect = @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
+        Graphics.window_width = width;
+        Graphics.window_height = height;
+    }
 
     Graphics.render_pass = sdl.BeginGPURenderPass(Graphics.command_buffer.?, &.{
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
@@ -379,14 +376,14 @@ pub fn endDraw() void {
         sdl.BlitGPUTexture(Graphics.command_buffer, &.{
             .source = .{
                 .texture = Graphics.fsaa_target,
-                .w = Graphics.window_size[0],
-                .h = Graphics.window_size[1],
+                .w = Graphics.window_width,
+                .h = Graphics.window_height,
                 .mip_level = fsaa_level - 1,
             },
             .destination = .{
                 .texture = Graphics.render_target,
-                .w = Graphics.window_size[0],
-                .h = Graphics.window_size[1],
+                .w = Graphics.window_width,
+                .h = Graphics.window_height,
             },
             .load_op = sdl.GPU_LOADOP_DONT_CARE,
             .filter = sdl.GPU_FILTER_NEAREST,
@@ -452,7 +449,7 @@ fn resetTextures(width: u32, height: u32) void {
         1,
     );
 
-    const target_format = sdl.SDL_GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
+    const target_format = sdl.GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
 
     sdl.ReleaseGPUTexture(Graphics.device, Graphics.fsaa_target);
     Graphics.fsaa_target = createTexture(
@@ -464,19 +461,8 @@ fn resetTextures(width: u32, height: u32) void {
     );
 }
 
-pub fn resize(width: u32, height: u32) void {
-    Graphics.to_resize = .{ width, height };
-}
-
 pub fn windowId() sdl.WindowID {
     return sdl.GetWindowID(Graphics.window);
-}
-
-pub fn getWidth() u32 {
-    return @max(1, Graphics.window_size[0]);
-}
-pub fn getHeight() u32 {
-    return @max(1, Graphics.window_size[1]);
 }
 
 pub fn generatePlane(x0: f32, y0: f32, x1: f32, y1: f32, w: f32, h: f32) [30]f32 {

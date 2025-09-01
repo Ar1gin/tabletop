@@ -350,7 +350,7 @@ pub fn tryRelease() bool {
     };
     object.target_transform.position = World.hand_transform.position;
     World.bringToTop(object);
-    if (!Game.keyboard.keys.is_pressed(sdl.SDL_SCANCODE_LSHIFT)) {
+    if (object.type == .card and !Game.keyboard.keys.is_pressed(sdl.SDL_SCANCODE_LSHIFT)) {
         if (World.getHover()) |hover_object| {
             if (hover_object.type == .deck) {
                 object.reparent(.{ .deck = hover_object.id });
@@ -510,8 +510,8 @@ pub fn updateCamera(delta: f32) void {
 
     if (Game.mouse.buttons.is_pressed(sdl.BUTTON_LEFT)) {
         if (World.panning) {
-            World.camera_position[0] += zoom_factor * Game.mouse.dx / @as(f32, @floatFromInt(Graphics.getWidth())) * -15;
-            World.camera_position[1] += zoom_factor * Game.mouse.dy / @as(f32, @floatFromInt(Graphics.getWidth())) * 15;
+            World.camera_position[0] += zoom_factor * Game.mouse.dx / @as(f32, @floatFromInt(Graphics.window_width)) * -15;
+            World.camera_position[1] += zoom_factor * Game.mouse.dy / @as(f32, @floatFromInt(Graphics.window_height)) * 15;
         }
     }
 

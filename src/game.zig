@@ -55,8 +55,8 @@ pub fn run() void {
         } else err.sdl();
 
         Game.processEvents();
-        Game.mouse.x_norm = (Game.mouse.x_screen / @as(f32, @floatFromInt(Graphics.getWidth()))) * 2 - 1;
-        Game.mouse.y_norm = (Game.mouse.y_screen / @as(f32, @floatFromInt(Graphics.getHeight()))) * -2 + 1;
+        Game.mouse.x_norm = (Game.mouse.x_screen / @as(f32, @floatFromInt(Graphics.window_width))) * 2 - 1;
+        Game.mouse.y_norm = (Game.mouse.y_screen / @as(f32, @floatFromInt(Graphics.window_height))) * -2 + 1;
         World.update(Game.time.delta);
         if (Game.beginDraw()) {
             World.draw();
@@ -89,10 +89,6 @@ fn processEvents() void {
             switch (event.type) {
                 sdl.EVENT_QUIT => {
                     Game.running = false;
-                },
-                sdl.EVENT_WINDOW_RESIZED => {
-                    if (event.window.windowID != Graphics.windowId()) continue;
-                    Graphics.resize(@intCast(event.window.data1), @intCast(event.window.data2));
                 },
                 sdl.EVENT_MOUSE_MOTION => {
                     if (event.motion.windowID != Graphics.windowId()) continue;
