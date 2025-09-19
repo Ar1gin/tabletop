@@ -12,13 +12,9 @@ const Order = i32;
 pub var object_map: std.AutoHashMapUnmanaged(Id, usize) = .{};
 pub var objects: std.ArrayListUnmanaged(Object) = .{};
 
-pub var hand_mesh: Graphics.Mesh = undefined;
-pub var cube_mesh: Graphics.Mesh = undefined;
-pub var table_mesh: Graphics.Mesh = undefined;
-pub var cubemap_mesh: Graphics.Mesh = undefined;
-pub var table_texture: Assets.Texture = undefined;
-pub var hand_texture: Assets.Texture = undefined;
-pub var cubemap_texture: Assets.Texture = undefined;
+pub var hand: Assets.Object = undefined;
+pub var table: Assets.Object = undefined;
+pub var cubemap: Assets.Object = undefined;
 
 pub var camera_position: @Vector(2, f32) = @splat(0);
 pub var hand_transform: Graphics.Transform = .{};
@@ -46,8 +42,7 @@ const Object = struct {
     target_transform: Graphics.Transform = .{},
     width: f32,
     height: f32,
-    mesh: Graphics.Mesh,
-    texture: Assets.Texture,
+    object: Assets.Object,
     order: Order,
     id: Id,
     index: u32,
@@ -99,15 +94,7 @@ pub fn initDebug() void {
             .type = .card,
             .width = 0.5,
             .height = 0.5,
-            .mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(
-                @as(f32, @floatFromInt(9 + i / 10)) / 16.0,
-                @as(f32, @floatFromInt(0 + i % 10)) / 16.0,
-                @as(f32, @floatFromInt(10 + i / 10)) / 16.0,
-                @as(f32, @floatFromInt(1 + i % 10)) / 16.0,
-                0.5,
-                0.5,
-            ))),
-            .texture = Assets.load(.texture, "data/yakuza.png"),
+            .object = Assets.load(.gltf, "data/yakuza/card.gltf"),
             .order = @intCast(i),
             .id = @intCast(i),
             .index = @intCast(i),
@@ -120,15 +107,7 @@ pub fn initDebug() void {
         .type = .deck,
         .width = 1,
         .height = 1,
-        .mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(
-            0.0 / 8.0,
-            4.0 / 8.0,
-            1.0 / 8.0,
-            5.0 / 8.0,
-            1,
-            1,
-        ))),
-        .texture = Assets.load(.texture, "data/yakuza.png"),
+        .object = Assets.load(.gltf, "data/yakuza/pad.gltf"),
         .order = 70,
         .id = 70,
         .index = 70,
@@ -139,27 +118,16 @@ pub fn initDebug() void {
         .type = .deck,
         .width = 1,
         .height = 1,
-        .mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(
-            0.0 / 8.0,
-            4.0 / 8.0,
-            1.0 / 8.0,
-            5.0 / 8.0,
-            1,
-            1,
-        ))),
-        .texture = Assets.load(.texture, "data/yakuza.png"),
+        .object = Assets.load(.gltf, "data/yakuza/pad.gltf"),
         .order = 71,
         .id = 71,
         .index = 71,
     }) catch err.oom();
     World.object_map.put(Game.alloc, 71, 71) catch err.oom();
 
-    World.table_mesh = Graphics.loadMesh(@ptrCast(&Graphics.generatePlane(0, 0, 0.5, 0.5, 8, 8)));
-    World.hand_mesh = Graphics.loadMesh(@ptrCast(&PLANE_MESH_DATA));
-    World.cubemap_mesh = Graphics.loadMesh(@ptrCast(&CUBEMAP_MESH_DATA));
-    World.table_texture = Assets.load(.texture, "data/yakuza.png");
-    World.hand_texture = Assets.load(.texture, "data/hand.png");
-    World.cubemap_texture = Assets.load(.texture, "data/cubemap.png");
+    World.hand = Assets.load(.gltf, "data/hand.gltf");
+    World.table = Assets.load(.gltf, "data/yakuza/table.gltf");
+    World.cubemap = Assets.load(.gltf, "data/cubemap.gltf");
 
     World.camera_position = @splat(0);
     World.hand_transform = .{};
@@ -177,15 +145,11 @@ pub fn initDebug() void {
 }
 
 pub fn deinit() void {
-    Graphics.unloadMesh(World.table_mesh);
-    Graphics.unloadMesh(World.hand_mesh);
-    Graphics.unloadMesh(World.cubemap_mesh);
-    Assets.free(World.table_texture);
-    Assets.free(World.hand_texture);
-    Assets.free(World.cubemap_texture);
+    Assets.free(World.hand);
+    Assets.free(World.table);
+    Assets.free(World.cubemap);
     for (World.objects.items) |*object| {
-        Assets.free(object.texture);
-        Graphics.unloadMesh(object.mesh);
+        Assets.free(object.object);
     }
     World.objects.clearAndFree(Game.alloc);
     World.object_map.clearAndFree(Game.alloc);
@@ -424,8 +388,9 @@ pub fn updateObject(object: *Object, delta: f32) void {
         .dock => {
             var topleft_x = -World.dock_last_width * 0.5 * DOCK_TILT_COS + World.dock_spacing * (@as(f32, @floatFromInt(object.parent_index)) - @as(f32, @floatFromInt(World.dock_objects - 1)) * 0.5);
             const total_w = @as(f32, @floatFromInt(World.dock_objects - 1)) * World.dock_spacing + World.dock_last_width * DOCK_TILT_COS;
+            const mouse_x = if (World.dock_focused) Game.mouse.x_norm else 0.5;
             if (total_w > Graphics.camera.aspect * 2) {
-                topleft_x += math.lerp(0, Graphics.camera.aspect - total_w * 0.5, Game.mouse.x_norm);
+                topleft_x += math.lerp(0, Graphics.camera.aspect - total_w * 0.5, mouse_x);
             }
             const hit = World.hover == object.id;
             const topleft_y = if (World.dock_focused) if (hit) @as(f32, 0.5) else @as(f32, 0.3) else @as(f32, 0.2);
@@ -465,12 +430,12 @@ pub fn updateObject(object: *Object, delta: f32) void {
 }
 
 pub fn draw() void {
-    Graphics.drawMesh(World.table_mesh, &World.table_texture, .{});
+    Graphics.drawObject(&World.table, .{});
 
     for (World.objects.items) |*object| {
         sw: switch (object.parent) {
             .none, .hand => {
-                Graphics.drawMesh(object.mesh, &object.texture, object.drawingTransform());
+                Graphics.drawObject(&object.object, object.drawingTransform());
             },
             .dock => {},
             .deck => |id| {
@@ -482,9 +447,8 @@ pub fn draw() void {
         }
     }
 
-    Graphics.drawMesh(
-        World.hand_mesh,
-        &World.hand_texture,
+    Graphics.drawObject(
+        &World.hand,
         Graphics.Transform.combineTransforms(
             .{
                 .position = .{ World.hand_scale * 0.5, -World.hand_scale * 0.5, 0 },
@@ -494,14 +458,14 @@ pub fn draw() void {
         ),
     );
 
-    Graphics.drawMesh(World.cubemap_mesh, &World.cubemap_texture, .{
+    Graphics.drawObject(&World.cubemap, .{
         .scale = Graphics.camera.far,
         .position = Graphics.camera.transform.position,
     });
     Graphics.clearDepth();
     for (World.objects.items) |*object| {
         if (object.parent == .dock)
-            Graphics.drawMesh(object.mesh, &object.texture, object.drawingTransform());
+            Graphics.drawObject(&object.object, object.drawingTransform());
     }
 }
 
@@ -580,65 +544,3 @@ fn objectOrderLessThan(ctx: void, lhs: Object, rhs: Object) bool {
     _ = ctx;
     return lhs.order < rhs.order;
 }
-
-const T1 = 1.0 / 3.0;
-const T2 = 2.0 / 3.0;
-const CUBEMAP_MESH_DATA = [_]f32{
-    -0.5, 0.5,  -0.5, T2,  0,
-    -0.5, -0.5, -0.5, T2,  0.5,
-    0.5,  0.5,  -0.5, 1,   0,
-    0.5,  -0.5, -0.5, 1,   0.5,
-    0.5,  0.5,  -0.5, 1,   0,
-    -0.5, -0.5, -0.5, T2,  0.5,
-
-    0.5,  0.5,  -0.5, 0,   1,
-    0.5,  -0.5, -0.5, T1,  1,
-    0.5,  0.5,  0.5,  0,   0.5,
-    0.5,  -0.5, 0.5,  T1,  0.5,
-    0.5,  0.5,  0.5,  0,   0.5,
-    0.5,  -0.5, -0.5, T1,  1,
-
-    0.5,  0.5,  0.5,  1.0, 0.0,
-    0.5,  -0.5, 0.5,  1.0, 1.0,
-    -0.5, 0.5,  0.5,  0.0, 0.0,
-    -0.5, -0.5, 0.5,  0.0, 1.0,
-    -0.5, 0.5,  0.5,  0.0, 0.0,
-    0.5,  -0.5, 0.5,  1.0, 1.0,
-
-    -0.5, 0.5,  0.5,  T1,  0,
-    -0.5, -0.5, 0.5,  0,   0,
-    -0.5, 0.5,  -0.5, T1,  0.5,
-    -0.5, -0.5, -0.5, 0,   0.5,
-    -0.5, 0.5,  -0.5, T1,  0.5,
-    -0.5, -0.5, 0.5,  0,   0,
-
-    -0.5, 0.5,  0.5,  T1,  0.5,
-    -0.5, 0.5,  -0.5, T1,  1,
-    0.5,  0.5,  0.5,  T2,  0.5,
-    0.5,  0.5,  -0.5, T2,  1,
-    0.5,  0.5,  0.5,  T2,  0.5,
-    -0.5, 0.5,  -0.5, T1,  1,
-
-    -0.5, -0.5, -0.5, T2,  0.5,
-    -0.5, -0.5, 0.5,  T2,  0,
-    0.5,  -0.5, -0.5, T1,  0.5,
-    0.5,  -0.5, 0.5,  T1,  0,
-    0.5,  -0.5, -0.5, T1,  0.5,
-    -0.5, -0.5, 0.5,  T2,  0,
-};
-const PLANE_MESH_DATA = [_]f32{
-    -0.5, -0.5, 0, 0.0, 1.0,
-    0.5,  0.5,  0, 1.0, 0.0,
-    -0.5, 0.5,  0, 0.0, 0.0,
-    0.5,  0.5,  0, 1.0, 0.0,
-    -0.5, -0.5, 0, 0.0, 1.0,
-    0.5,  -0.5, 0, 1.0, 1.0,
-};
-const PLANE_MESH_DATA_HALF = [_]f32{
-    -0.25, -0.25, 0, 0.0, 1.0,
-    0.25,  0.25,  0, 1.0, 0.0,
-    -0.25, 0.25,  0, 0.0, 0.0,
-    0.25,  0.25,  0, 1.0, 0.0,
-    -0.25, -0.25, 0, 0.0, 1.0,
-    0.25,  -0.25, 0, 1.0, 1.0,
-};

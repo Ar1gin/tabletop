@@ -1,11 +1,17 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const err = @import("error.zig");
 const Game = @import("game.zig");
 const FileLoader = @import("assets/file.zig");
 const TextureLoader = @import("assets/texture.zig");
+const GltfLoader = @import("assets/gltf.zig");
 const Assets = @This();
 
+// TODO: Unload assets in correct order to account for asset dependencies
+
+pub const File = AssetContainer(FileLoader);
 pub const Texture = AssetContainer(TextureLoader);
+pub const Object = AssetContainer(GltfLoader);
 
 const WORKERS_MAX = 4;
 var next_worker_update: usize = 0;
@@ -50,16 +56,18 @@ pub const LoadError = error{
     ParsingError,
     SdlError,
     FileTooBig,
-} || std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError;
+} || std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.json.ParseError(std.json.Scanner);
 
 pub const AssetType = enum {
     file,
     texture,
+    gltf,
 
     pub fn getType(comptime self: @This()) type {
         return switch (self) {
             .file => FileLoader,
             .texture => TextureLoader,
+            .gltf => GltfLoader,
         };
     }
 };
@@ -82,6 +90,8 @@ pub const AssetCell = struct {
 
     fn load(self: *AssetCell, alloc: std.mem.Allocator) void {
         self.loader(self, alloc) catch |e| {
+            if (builtin.mode == .Debug)
+                std.debug.panic("Asset loading error: {s} - {}!\n", .{ self.path, e });
             self.state = .{ .fail = e };
             return;
         };
@@ -119,6 +129,8 @@ pub fn AssetContainer(comptime T: type) type {
                 },
             }
         }
+        // TODO: Add smth like `Assets.immediateLoad`
+
         /// To be used by worker threads to request other assets
         pub fn getSync(self: *@This()) !*T {
             sw: switch (self.last_state) {
@@ -168,6 +180,7 @@ pub fn deinit() void {
         std.debug.assert(asset.*.counter == 0);
         if (asset.*.state == .loaded)
             asset.*.unload(Game.alloc);
+        Game.alloc.free(asset.*.path);
         Game.alloc.destroy(asset.*);
     }
     Assets.asset_map.clearAndFree(Game.alloc);
@@ -202,6 +215,7 @@ pub fn update() void {
             if (!Assets.asset_map.remove(.{ .type = request.type, .path = request.path })) continue;
             if (request.state == .loaded)
                 request.unload(Game.alloc);
+            Game.alloc.free(request.path);
             Game.alloc.destroy(request);
         }
     }
@@ -259,7 +273,7 @@ fn mapAsset(comptime asset_type: AssetType, path: []const u8) *AssetCell {
             .mutex = .{},
             .type = asset_type,
             .data = undefined,
-            .path = path,
+            .path = Game.alloc.dupe(u8, path) catch err.oom(),
             .loader = Assets.makeLoader(asset_type.getType(), asset_type.getType().load),
             .unloader = Assets.makeUnloader(asset_type.getType(), asset_type.getType().unload),
             .state = .not_loaded,

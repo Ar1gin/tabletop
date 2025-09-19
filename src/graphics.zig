@@ -7,11 +7,6 @@ const Assets = @import("assets.zig");
 pub const Transform = @import("graphics/transform.zig");
 pub const Camera = @import("graphics/camera.zig");
 
-pub const Mesh = struct {
-    vertex_start: usize,
-    vertex_count: usize,
-};
-
 pub var window: *sdl.Window = undefined;
 pub var device: *sdl.GPUDevice = undefined;
 /// Only available while drawing
@@ -21,13 +16,6 @@ var render_target: ?*sdl.GPUTexture = null;
 
 var shader_vert: *sdl.GPUShader = undefined;
 var shader_frag: *sdl.GPUShader = undefined;
-
-var vertex_buffer: *sdl.GPUBuffer = undefined;
-var vertex_buffer_capacity: usize = undefined;
-var vertex_buffer_used: usize = undefined;
-
-var transfer_buffer: *sdl.GPUTransferBuffer = undefined;
-var transfer_buffer_capacity: usize = undefined;
 
 var depth_texture: *sdl.GPUTexture = undefined;
 var fsaa_target: *sdl.GPUTexture = undefined;
@@ -40,11 +28,9 @@ var fsaa_level: u32 = 3;
 
 pub var camera: Camera = undefined;
 
-const VERTEX_BUFFER_DEFAULT_CAPACITY = 1024;
-const VERTEX_BUFFER_GROWTH_MULTIPLIER = 2;
 const BYTES_PER_VERTEX = 5 * 4;
 const DEPTH_FORMAT = sdl.GPU_TEXTUREFORMAT_D32_FLOAT;
-pub const TRANSFER_BUFFER_DEFAULT_CAPACITY = 256 * 1024;
+pub const TRANSFER_BUFFER_DEFAULT_CAPACITY = 512 * 1024;
 pub const MIP_LEVEL = 4;
 
 const Graphics = @This();
@@ -91,19 +77,6 @@ pub fn create() void {
             .num_samplers = 1,
         },
     );
-
-    Graphics.vertex_buffer = sdl.CreateGPUBuffer(Graphics.device, &.{
-        .usage = sdl.GPU_BUFFERUSAGE_VERTEX,
-        .size = VERTEX_BUFFER_DEFAULT_CAPACITY,
-    }) orelse err.sdl();
-    Graphics.vertex_buffer_capacity = VERTEX_BUFFER_DEFAULT_CAPACITY;
-    Graphics.vertex_buffer_used = 0;
-
-    Graphics.transfer_buffer = sdl.CreateGPUTransferBuffer(Graphics.device, &.{
-        .size = TRANSFER_BUFFER_DEFAULT_CAPACITY,
-        .usage = sdl.GPU_TRANSFERBUFFERUSAGE_UPLOAD | sdl.GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
-    }) orelse err.sdl();
-    Graphics.transfer_buffer_capacity = TRANSFER_BUFFER_DEFAULT_CAPACITY;
 
     const target_format = sdl.GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
     if (target_format == sdl.GPU_TEXTUREFORMAT_INVALID) err.sdl();
@@ -183,8 +156,6 @@ pub fn destroy() void {
     sdl.ReleaseGPUGraphicsPipeline(Graphics.device, Graphics.pipeline);
     sdl.ReleaseGPUTexture(Graphics.device, Graphics.fsaa_target);
     sdl.ReleaseGPUTexture(Graphics.device, Graphics.depth_texture);
-    sdl.ReleaseGPUBuffer(Graphics.device, Graphics.vertex_buffer);
-    sdl.ReleaseGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer);
 
     sdl.ReleaseGPUShader(Graphics.device, Graphics.shader_vert);
     sdl.ReleaseGPUShader(Graphics.device, Graphics.shader_frag);
@@ -194,98 +165,6 @@ pub fn destroy() void {
         Graphics.command_buffer = null;
     }
     sdl.DestroyGPUDevice(Graphics.device);
-}
-
-pub fn loadMesh(mesh_bytes: []const u8) Mesh {
-    std.debug.assert(mesh_bytes.len < Graphics.transfer_buffer_capacity);
-
-    var size_mult: usize = 1;
-    while (Graphics.vertex_buffer_used + mesh_bytes.len > Graphics.vertex_buffer_capacity * size_mult) {
-        size_mult *= VERTEX_BUFFER_GROWTH_MULTIPLIER;
-    }
-    if (size_mult > 1) {
-        Graphics.growVertexBuffer(Graphics.vertex_buffer_capacity * size_mult);
-    }
-
-    const map = sdl.MapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer, true) orelse err.sdl();
-    @memcpy(@as([*]u8, @ptrCast(map)), mesh_bytes);
-    sdl.UnmapGPUTransferBuffer(Graphics.device, Graphics.transfer_buffer);
-
-    const temp_command_buffer = sdl.AcquireGPUCommandBuffer(Graphics.device) orelse err.sdl();
-    const fence = blk: {
-        const copy_pass = sdl.BeginGPUCopyPass(temp_command_buffer) orelse err.sdl();
-        sdl.UploadToGPUBuffer(copy_pass, &.{
-            .transfer_buffer = Graphics.transfer_buffer,
-            .offset = 0,
-        }, &.{
-            .buffer = Graphics.vertex_buffer,
-            .offset = @intCast(Graphics.vertex_buffer_used),
-            .size = @intCast(mesh_bytes.len),
-        }, false);
-        sdl.EndGPUCopyPass(copy_pass);
-
-        break :blk sdl.SubmitGPUCommandBufferAndAcquireFence(temp_command_buffer) orelse err.sdl();
-    };
-    defer sdl.ReleaseGPUFence(Graphics.device, fence);
-
-    if (!sdl.WaitForGPUFences(Graphics.device, true, &fence, 1)) err.sdl();
-
-    const vertex_start = Graphics.vertex_buffer_used;
-    Graphics.vertex_buffer_used += mesh_bytes.len;
-
-    return Mesh{
-        .vertex_start = vertex_start / BYTES_PER_VERTEX,
-        .vertex_count = mesh_bytes.len / BYTES_PER_VERTEX,
-    };
-}
-
-pub fn unloadMesh(mesh: Mesh) void {
-    // TODO: free some memory
-    _ = &mesh;
-}
-
-fn growVertexBuffer(new_size: usize) void {
-    const new_buffer = sdl.CreateGPUBuffer(Graphics.device, &.{
-        .size = @intCast(new_size),
-        .usage = sdl.GPU_BUFFERUSAGE_VERTEX,
-    }) orelse err.sdl();
-
-    const temp_command_buffer = sdl.AcquireGPUCommandBuffer(Graphics.device) orelse err.sdl();
-
-    const fence = blk: {
-        const copy_pass = sdl.BeginGPUCopyPass(temp_command_buffer);
-        var copied: usize = 0;
-        while (copied < Graphics.vertex_buffer_used) {
-            const to_transer = @min(Graphics.vertex_buffer_used - copied, Graphics.transfer_buffer_capacity);
-            sdl.DownloadFromGPUBuffer(copy_pass, &.{
-                .buffer = Graphics.vertex_buffer,
-                .offset = @intCast(copied),
-                .size = @intCast(to_transer),
-            }, &.{
-                .transfer_buffer = Graphics.transfer_buffer,
-                .offset = 0,
-            });
-            sdl.UploadToGPUBuffer(copy_pass, &.{
-                .transfer_buffer = Graphics.transfer_buffer,
-                .offset = 0,
-            }, &.{
-                .buffer = new_buffer,
-                .offset = @intCast(copied),
-                .size = @intCast(to_transer),
-            }, false);
-            copied += to_transer;
-        }
-        sdl.EndGPUCopyPass(copy_pass);
-
-        break :blk sdl.SubmitGPUCommandBufferAndAcquireFence(temp_command_buffer) orelse err.sdl();
-    };
-    defer sdl.ReleaseGPUFence(Graphics.device, fence);
-
-    if (!sdl.WaitForGPUFences(Graphics.device, true, &fence, 1)) err.sdl();
-
-    sdl.ReleaseGPUBuffer(Graphics.device, Graphics.vertex_buffer);
-    Graphics.vertex_buffer = new_buffer;
-    Graphics.vertex_buffer_capacity = new_size;
 }
 
 /// If window is minimized returns `false`, `render_pass` remains null
@@ -323,7 +202,6 @@ pub fn beginDraw() bool {
     }) orelse err.sdl();
 
     sdl.BindGPUGraphicsPipeline(Graphics.render_pass, Graphics.pipeline);
-    sdl.BindGPUVertexBuffers(Graphics.render_pass, 0, &.{ .offset = 0, .buffer = Graphics.vertex_buffer }, 1);
     Graphics.camera.computeMatrix();
     sdl.PushGPUVertexUniformData(Graphics.command_buffer, 0, &Graphics.camera.matrix, 16 * 4);
 
@@ -350,20 +228,28 @@ pub fn clearDepth() void {
     }) orelse err.sdl();
 
     sdl.BindGPUGraphicsPipeline(Graphics.render_pass, Graphics.pipeline);
-    sdl.BindGPUVertexBuffers(Graphics.render_pass, 0, &.{ .offset = 0, .buffer = Graphics.vertex_buffer }, 1);
     sdl.PushGPUVertexUniformData(Graphics.command_buffer, 0, &Graphics.camera.matrix, 16 * 4);
 }
 
-pub fn drawMesh(mesh: Mesh, texture: *Assets.Texture, transform: Transform) void {
+pub fn drawObject(object: *Assets.Object, transform: Transform) void {
     if (Graphics.render_pass == null) return;
-    const asset_texture = texture.get() orelse return;
+    const asset_object = object.get() orelse return;
 
     sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &transform.matrix(), 16 * 4);
-    sdl.BindGPUFragmentSamplers(Graphics.render_pass, 0, &sdl.GPUTextureSamplerBinding{
-        .texture = asset_texture.texture,
-        .sampler = asset_texture.sampler,
-    }, 1);
-    sdl.DrawGPUPrimitives(Graphics.render_pass, @intCast(mesh.vertex_count), 1, @intCast(mesh.vertex_start), 0);
+    for (asset_object.nodes) |node| {
+        const mesh = &asset_object.meshes[node.mesh];
+
+        for (mesh.primitives) |*primitive| {
+            const asset_texture = primitive.texture.get() orelse continue;
+            sdl.BindGPUFragmentSamplers(Graphics.render_pass, 0, &sdl.GPUTextureSamplerBinding{
+                .texture = asset_texture.texture,
+                .sampler = asset_texture.sampler,
+            }, 1);
+            sdl.BindGPUVertexBuffers(Graphics.render_pass, 0, &.{ .offset = 0, .buffer = primitive.vertex_buffer }, 1);
+            sdl.BindGPUIndexBuffer(Graphics.render_pass, &.{ .buffer = primitive.index_buffer }, sdl.GPU_INDEXELEMENTSIZE_16BIT);
+            sdl.DrawGPUIndexedPrimitives(Graphics.render_pass, primitive.indices, 1, 0, 0, 0);
+        }
+    }
 }
 
 pub fn endDraw() void {
