@@ -56,6 +56,7 @@ pub const LoadError = error{
     ParsingError,
     SdlError,
     FileTooBig,
+    UnsupportedAsset,
 } || std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.json.ParseError(std.json.Scanner);
 
 pub const AssetType = enum {
@@ -123,7 +124,7 @@ pub fn AssetContainer(comptime T: type) type {
                         self.last_state = self.asset_pointer.state;
                     }
                     if (self.last_state == .loaded) {
-                        self.data_pointer = @alignCast(@ptrCast(self.asset_pointer.data));
+                        self.data_pointer = @ptrCast(@alignCast(self.asset_pointer.data));
                         return self.data_pointer;
                     } else return null;
                 },
@@ -150,7 +151,7 @@ pub fn AssetContainer(comptime T: type) type {
                         self.last_state = self.asset_pointer.state;
                     }
                     if (self.last_state == .loaded) {
-                        self.data_pointer = @alignCast(@ptrCast(self.asset_pointer.data));
+                        self.data_pointer = @ptrCast(@alignCast(self.asset_pointer.data));
                     }
                     continue :sw self.last_state;
                 },
@@ -298,8 +299,8 @@ fn makeLoader(comptime T: type, comptime func: *const fn ([]const u8, std.mem.Al
 fn makeUnloader(comptime T: type, comptime func: *const fn (T, std.mem.Allocator) void) *const fn (*AssetCell, std.mem.Allocator) void {
     const Container = struct {
         pub fn unloader(cell: *AssetCell, alloc: std.mem.Allocator) void {
-            func(@as(*T, @alignCast(@ptrCast(cell.data))).*, alloc);
-            alloc.destroy(@as(*T, @alignCast(@ptrCast(cell.data))));
+            func(@as(*T, @ptrCast(@alignCast(cell.data))).*, alloc);
+            alloc.destroy(@as(*T, @ptrCast(@alignCast(cell.data))));
         }
     };
     return Container.unloader;

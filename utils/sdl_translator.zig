@@ -1,6 +1,7 @@
 const std = @import("std");
 const sdl = @cImport({
     @cInclude("SDL3/SDL.h");
+    @cInclude("SDL3_image/SDL_image.h");
 });
 
 const PREFIX = "SDL_";
@@ -23,12 +24,8 @@ pub fn main() !void {
         try std.fs.cwd().createFile(output, .{});
     defer file.close();
 
-    const writer = file.writer();
-
-    const stdout = std.io.getStdOut();
-    defer stdout.close();
-
-    const out = stdout.writer();
+    var writer_buffer: [4096]u8 = undefined;
+    var writer = file.writer(&writer_buffer);
 
     var renamed_count: usize = 0;
     for (@typeInfo(sdl).@"struct".decls) |decl| {
@@ -36,7 +33,7 @@ pub fn main() !void {
 
         const new_name: []const u8 = decl.name[PREFIX.len..];
 
-        try writer.print(
+        try writer.interface.print(
             \\#define {1s} {0s}
             \\
         , .{ decl.name, new_name });
@@ -45,5 +42,4 @@ pub fn main() !void {
     if (renamed_count == 0) {
         @panic("No SDL definitions renamed");
     }
-    try out.print("[SDL Translator] {} SDL definitions renamed\n", .{renamed_count});
 }

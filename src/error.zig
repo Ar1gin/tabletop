@@ -14,7 +14,3 @@ const FileError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.Fil
 pub fn file(err: FileError, path: []const u8) noreturn {
     std.debug.panic("Error while reading \"{s}\": {any}", .{ path, err });
 }
-
-pub fn stbi() noreturn {
-    std.debug.panic("STBI error!\n", .{});
-}

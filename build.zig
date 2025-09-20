@@ -6,6 +6,10 @@ const SHADERS: []const []const u8 = &.{
     "data/shaders/basic.vert",
     "data/shaders/basic.frag",
 };
+const SDL_LIBS: []const []const u8 = &.{
+    "SDL3",
+    "SDL3_image",
+};
 
 pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
@@ -56,15 +60,15 @@ fn stepBuildClient(
 ) *Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = "tabletop_client",
-        .root_source_file = b.path("src/client.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/client.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     exe.root_module.addImport("sdl", sdl_module);
     exe.step.dependOn(sdl_step);
-
-    exe.addIncludePath(b.path("lib/clibs"));
 
     return exe;
 }
@@ -76,9 +80,11 @@ fn stepBuildServer(
 ) *Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = "tabletop_server",
-        .root_source_file = b.path("src/server.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/server.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     return exe;
@@ -93,15 +99,15 @@ fn stepBuildOffline(
 ) *Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = "tabletop",
-        .root_source_file = b.path("src/offline.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/offline.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     exe.root_module.addImport("sdl", sdl_module);
     exe.step.dependOn(sdl_step);
-
-    exe.addIncludePath(b.path("lib/clibs"));
 
     return exe;
 }
@@ -112,11 +118,15 @@ fn stepBuildSdlTranslator(
 ) *Build.Step.Compile {
     const sdl_translator = b.addExecutable(.{
         .name = "sdl_header_translator",
-        .root_source_file = b.path("utils/sdl_translator.zig"),
-        .target = target,
-        .optimize = .Debug,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("utils/sdl_translator.zig"),
+            .target = target,
+            .optimize = .Debug,
+        }),
     });
-    sdl_translator.linkSystemLibrary("SDL3");
+    for (SDL_LIBS) |lib| {
+        sdl_translator.linkSystemLibrary(lib);
+    }
     return sdl_translator;
 }
 
@@ -138,20 +148,25 @@ fn stepSdlModule(
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) struct { *Build.Module, *Build.Step } {
-    const sdl_module = b.addModule("sdl", .{
-        .root_source_file = b.path("lib/sdl.zig"),
+    const translate_sdl_step, const sdl_rename = stepTranslateSdl(b, target);
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.path("lib/sdl.h"),
         .link_libc = true,
         .target = target,
         .optimize = optimize,
     });
-    sdl_module.linkSystemLibrary("SDL3", .{});
+    translate_c.addIncludePath(sdl_rename.dirname());
+    const translate_module = translate_c.createModule();
+    for (SDL_LIBS) |lib| {
+        translate_module.linkSystemLibrary(lib, .{ .needed = true });
+    }
 
-    const translate_step, const sdl_rename = stepTranslateSdl(b, target);
-    sdl_module.addIncludePath(sdl_rename.dirname());
+    translate_c.step.dependOn(translate_sdl_step);
 
     return .{
-        sdl_module,
-        translate_step,
+        translate_module,
+        &translate_c.step,
     };
 }
 

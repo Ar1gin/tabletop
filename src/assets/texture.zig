@@ -1,7 +1,6 @@
 const std = @import("std");
 const sdl = @import("sdl");
 const err = @import("../error.zig");
-const c = @import("../c.zig");
 const Assets = @import("../assets.zig");
 const Graphics = @import("../graphics.zig");
 
@@ -14,26 +13,21 @@ pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This()
     defer Assets.free(file);
     const data = (file.getSync() catch return error.DependencyError).bytes;
 
-    var width: u32 = undefined;
-    var height: u32 = undefined;
-    var channels: u32 = undefined;
-    const image = c.stbi_load_from_memory(
-        @ptrCast(data),
-        @intCast(data.len),
-        @ptrCast(&width),
-        @ptrCast(&height),
-        @ptrCast(&channels),
-        4,
-    );
-    if (image == null) return error.ParsingError;
-    defer c.stbi_image_free(image);
-    const image_slice = image[0..@intCast(width * height * channels)];
+    const image: *sdl.Surface = @ptrCast(sdl.IMG_Load_IO(sdl.IOFromConstMem(data.ptr, data.len), true) orelse return error.ParsingError);
+    defer sdl.DestroySurface(image);
+    const format = image.format;
+
+    const width: u32 = @intCast(image.w);
+    const height: u32 = @intCast(image.h);
+    const channels: u32 = 4;
+
+    const image_slice = @as([*]u8, @ptrCast(image.pixels))[0..@intCast(width * height * channels)];
 
     if (width > 8192 or height > 8192) return error.FileTooBig;
 
     const target_format = sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
     const bytes_per_pixel = 4;
-    const mip_level = if(std.math.isPowerOfTwo(width) and width == height) @as(u32, Graphics.MIP_LEVEL) else @as(u32, 1);
+    const mip_level = if (std.math.isPowerOfTwo(width) and width == height) @as(u32, Graphics.MIP_LEVEL) else @as(u32, 1);
 
     const texture = Graphics.createTexture(
         width,
@@ -63,6 +57,43 @@ pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This()
             defer sdl.EndGPUCopyPass(copy_pass);
 
             const map: [*]u8 = @ptrCast(sdl.MapGPUTransferBuffer(Graphics.device, transfer_buffer, false) orelse err.sdl());
+            var pixel: u32 = rows_uploaded * width * bytes_per_pixel;
+            var mapped: u32 = 0;
+            while (pixel < (rows_uploaded + rows_to_upload) * width * bytes_per_pixel) {
+                defer pixel += bytes_per_pixel;
+                defer mapped += bytes_per_pixel;
+                switch (format) {
+                    // Convert to RGBA8888
+                    sdl.PIXELFORMAT_ABGR8888 => {
+                        map[mapped + 0] = image_slice[pixel + 3];
+                        map[mapped + 1] = image_slice[pixel + 2];
+                        map[mapped + 2] = image_slice[pixel + 1];
+                        map[mapped + 3] = image_slice[pixel + 0];
+                    },
+                    sdl.PIXELFORMAT_ARGB8888 => {
+                        map[mapped + 0] = image_slice[pixel + 1];
+                        map[mapped + 1] = image_slice[pixel + 2];
+                        map[mapped + 2] = image_slice[pixel + 3];
+                        map[mapped + 3] = image_slice[pixel + 0];
+                    },
+                    sdl.PIXELFORMAT_RGBA8888 => {
+                        map[mapped + 0] = image_slice[pixel + 0];
+                        map[mapped + 1] = image_slice[pixel + 1];
+                        map[mapped + 2] = image_slice[pixel + 2];
+                        map[mapped + 3] = image_slice[pixel + 3];
+                    },
+                    sdl.PIXELFORMAT_BGRA8888 => {
+                        map[mapped + 0] = image_slice[pixel + 2];
+                        map[mapped + 1] = image_slice[pixel + 1];
+                        map[mapped + 2] = image_slice[pixel + 0];
+                        map[mapped + 3] = image_slice[pixel + 3];
+                    },
+                    else => {
+                        sdl.UnmapGPUTransferBuffer(Graphics.device, transfer_buffer);
+                        return error.UnsupportedAsset;
+                    },
+                }
+            }
             @memcpy(map, image_slice[(rows_uploaded * width * bytes_per_pixel)..((rows_uploaded + rows_to_upload) * width * bytes_per_pixel)]);
             sdl.UnmapGPUTransferBuffer(Graphics.device, transfer_buffer);
 

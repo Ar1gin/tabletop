@@ -282,7 +282,7 @@ fn loadShader(path: []const u8, info: sdl.GPUShaderCreateInfo) *sdl.GPUShader {
     const file = std.fs.cwd().openFile(path, .{}) catch |e| err.file(e, path);
     defer file.close();
 
-    const code = file.readToEndAllocOptions(std.heap.c_allocator, std.math.maxInt(usize), null, 1, 0) catch |e| err.file(e, path);
+    const code = file.readToEndAllocOptions(std.heap.c_allocator, std.math.maxInt(usize), null, .@"1", 0) catch |e| err.file(e, path);
     defer std.heap.c_allocator.free(code);
 
     var updated_info = info;
