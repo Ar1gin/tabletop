@@ -176,6 +176,7 @@ pub fn deinit() void {
         if (worker.thread == null) continue;
         worker.thread.?.join();
     }
+    updateFree();
     var iter = Assets.asset_map.valueIterator();
     while (iter.next()) |asset| {
         std.debug.assert(asset.*.counter == 0);
@@ -204,22 +205,28 @@ pub fn update() void {
         Assets.next_worker_update = 0;
     }
 
-    Assets.free_board_mutex.lock();
-    defer Assets.free_board_mutex.unlock();
-    if (Assets.free_board.items.len == 0) return;
+    updateFree();
+}
 
+fn updateFree() void {
     // TODO: Delegate freeing to worker threads?
     Assets.asset_map_mutex.lock();
     defer Assets.asset_map_mutex.unlock();
+
+    Assets.free_board_mutex.lock();
     while (Assets.free_board.pop()) |request| {
         if (@atomicLoad(usize, &request.counter, .monotonic) == 0) {
             if (!Assets.asset_map.remove(.{ .type = request.type, .path = request.path })) continue;
-            if (request.state == .loaded)
+            if (request.state == .loaded) {
+                Assets.free_board_mutex.unlock();
                 request.unload(Game.alloc);
+                Assets.free_board_mutex.lock();
+            }
             Game.alloc.free(request.path);
             Game.alloc.destroy(request);
         }
     }
+    Assets.free_board_mutex.unlock();
 }
 
 pub fn load(comptime asset_type: AssetType, path: []const u8) AssetContainer(asset_type.getType()) {
