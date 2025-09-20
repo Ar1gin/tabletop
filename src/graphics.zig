@@ -142,7 +142,6 @@ pub fn create() void {
     Graphics.camera = Camera{
         .transform = .{},
         .near = 1.0 / 16.0,
-        .far = 128.0,
         .lens = 1.5,
         .aspect = 16.0 / 9.0,
         .matrix = undefined,
@@ -193,7 +192,7 @@ pub fn beginDraw() bool {
         .mip_level = 0,
         .texture = Graphics.fsaa_target,
     }, 1, &.{
-        .clear_depth = 1.0,
+        .clear_depth = 0.0,
         .load_op = sdl.GPU_LOADOP_CLEAR,
         .store_op = sdl.GPU_STOREOP_DONT_CARE,
         .stencil_load_op = sdl.GPU_STOREOP_DONT_CARE,
@@ -219,7 +218,7 @@ pub fn clearDepth() void {
         .mip_level = 0,
         .texture = Graphics.fsaa_target,
     }, 1, &.{
-        .clear_depth = 1.0,
+        .clear_depth = 0.0,
         .load_op = sdl.GPU_LOADOP_CLEAR,
         .store_op = sdl.GPU_STOREOP_DONT_CARE,
         .stencil_load_op = sdl.GPU_STOREOP_DONT_CARE,

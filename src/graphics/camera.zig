@@ -8,7 +8,6 @@ transform: Transform,
 /// tangent of the half of the view angle (90 degress = 1 "lens")
 lens: f32,
 near: f32,
-far: f32,
 /// width = height * aspect
 aspect: f32,
 
@@ -19,14 +18,11 @@ pub fn computeMatrix(camera: *Camera) void {
 
     const xx = 1.0 / (camera.lens * camera.aspect);
     const yy = 1.0 / camera.lens;
-    const fnmod = 1.0 / (camera.far - camera.near);
-    const zz = camera.far * fnmod;
-    const wz = -camera.near * camera.far * fnmod;
     const projection = @Vector(16, f32){
-        xx, 0,  0,   0,
-        0,  yy, 0,   0,
-        0,  0,  -zz, wz,
-        0,  0,  -1,  0,
+        xx, 0,  0,  0,
+        0,  yy, 0,  0,
+        0,  0,  0,  camera.near,
+        0,  0,  -1, 0,
     };
     camera.matrix = Transform.multiplyMatrix(projection, camera.transform.inverseMatrix());
 }
@@ -61,9 +57,9 @@ pub fn mouse_in_quad(camera: Camera, mouse: @Vector(2, f32), quad_transform: Tra
     const hh = height * 0.5;
     const pi: [4]@Vector(2, f32) = .{
         .{ -hw, -hh },
-        .{ -hw,  hh },
-        .{  hw,  hh },
-        .{  hw, -hh },
+        .{ -hw, hh },
+        .{ hw, hh },
+        .{ hw, -hh },
     };
     var po: [4]@Vector(2, f32) = undefined;
     for (0..4) |i| {

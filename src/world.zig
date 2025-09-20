@@ -459,7 +459,7 @@ pub fn draw() void {
     );
 
     Graphics.drawObject(&World.cubemap, .{
-        .scale = Graphics.camera.far,
+        .scale = 1e20,
         .position = Graphics.camera.transform.position,
     });
     Graphics.clearDepth();

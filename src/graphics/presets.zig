@@ -12,7 +12,7 @@ pub const BLEND_NORMAL = sdl.GPUColorTargetBlendState{
 };
 
 pub const DEPTH_ENABLED = sdl.GPUDepthStencilState{
-    .compare_op = sdl.GPU_COMPAREOP_LESS,
+    .compare_op = sdl.GPU_COMPAREOP_GREATER,
     .enable_depth_test = true,
     .enable_depth_write = true,
 };
