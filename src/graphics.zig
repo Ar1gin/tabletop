@@ -13,6 +13,7 @@ pub var device: *sdl.GPUDevice = undefined;
 var command_buffer: ?*sdl.GPUCommandBuffer = null;
 var render_pass: ?*sdl.GPURenderPass = null;
 var render_target: ?*sdl.GPUTexture = null;
+var render_fsaa: bool = undefined;
 
 var shader_vert: *sdl.GPUShader = undefined;
 var shader_frag: *sdl.GPUShader = undefined;
@@ -23,8 +24,12 @@ var pipeline: *sdl.GPUGraphicsPipeline = undefined;
 
 pub var window_width: u32 = undefined;
 pub var window_height: u32 = undefined;
+pub var pixel_width: u32 = undefined;
+pub var pixel_height: u32 = undefined;
 var fsaa_scale: u32 = 4;
 var fsaa_level: u32 = 3;
+var render_width: u32 = undefined;
+var render_height: u32 = undefined;
 
 pub var camera: Camera = undefined;
 
@@ -45,8 +50,17 @@ pub fn create() void {
         "",
         1600,
         900,
-        sdl.WINDOW_VULKAN | sdl.WINDOW_RESIZABLE,
+        sdl.WINDOW_VULKAN | sdl.WINDOW_RESIZABLE | sdl.WINDOW_HIGH_PIXEL_DENSITY,
     ) orelse err.sdl();
+    if (!sdl.GetWindowSizeInPixels(Graphics.window, @ptrCast(&Graphics.window_width), @ptrCast(&Graphics.window_height))) {
+        Graphics.window_width = 1600;
+        Graphics.window_height = 900;
+    }
+    const scale = sdl.GetWindowDisplayScale(Graphics.window);
+    Graphics.pixel_width = @intFromFloat(@round(scale * @as(f32, @floatFromInt(Graphics.window_width))));
+    Graphics.pixel_height = @intFromFloat(@round(scale * @as(f32, @floatFromInt(Graphics.window_height))));
+    Graphics.render_width = pixel_width;
+    Graphics.render_height = pixel_height;
 
     // Device
     Graphics.device = sdl.CreateGPUDevice(
@@ -81,19 +95,16 @@ pub fn create() void {
     const target_format = sdl.GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
     if (target_format == sdl.GPU_TEXTUREFORMAT_INVALID) err.sdl();
 
-    // TODO: Clean
-    if (!sdl.GetWindowSizeInPixels(Graphics.window, @ptrCast(&Graphics.window_width), @ptrCast(&Graphics.window_height))) err.sdl();
-
     Graphics.depth_texture = createTexture(
-        @as(u32, @intCast(Graphics.window_width)) * Graphics.fsaa_scale,
-        @as(u32, @intCast(Graphics.window_height)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(Graphics.render_width)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(Graphics.render_height)) * Graphics.fsaa_scale,
         DEPTH_FORMAT,
         sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
         1,
     );
     Graphics.fsaa_target = createTexture(
-        @as(u32, @intCast(Graphics.window_width)) * Graphics.fsaa_scale,
-        @as(u32, @intCast(Graphics.window_height)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(Graphics.render_width)) * Graphics.fsaa_scale,
+        @as(u32, @intCast(Graphics.render_height)) * Graphics.fsaa_scale,
         target_format,
         sdl.GPU_TEXTUREUSAGE_COLOR_TARGET | sdl.GPU_TEXTUREUSAGE_SAMPLER,
         fsaa_level,
@@ -177,20 +188,21 @@ pub fn beginDraw() bool {
     // Window is probably hidden
     if (Graphics.render_target == null or width == 0 or height == 0) return false;
 
-    if (width != Graphics.window_width or height != Graphics.window_height) {
-        Graphics.resetTextures(width, height);
-        Graphics.camera.aspect = @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
-        Graphics.window_width = width;
-        Graphics.window_height = height;
+    if (Graphics.render_width != Graphics.pixel_width or Graphics.render_height != Graphics.pixel_height) {
+        Graphics.render_width = Graphics.pixel_width;
+        Graphics.render_height = Graphics.pixel_height;
+        Graphics.resetTextures(Graphics.render_width, Graphics.render_height);
+        Graphics.camera.aspect = @as(f32, @floatFromInt(Graphics.render_width)) / @as(f32, @floatFromInt(Graphics.render_height));
     }
 
+    Graphics.render_fsaa = Graphics.fsaa_level > 1;
     Graphics.render_pass = sdl.BeginGPURenderPass(Graphics.command_buffer.?, &.{
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
         .cycle = false,
         .load_op = sdl.GPU_LOADOP_CLEAR,
         .store_op = sdl.GPU_STOREOP_STORE,
         .mip_level = 0,
-        .texture = Graphics.fsaa_target,
+        .texture = if (Graphics.render_fsaa) Graphics.fsaa_target else Graphics.render_target,
     }, 1, &.{
         .clear_depth = 0.0,
         .load_op = sdl.GPU_LOADOP_CLEAR,
@@ -216,7 +228,7 @@ pub fn clearDepth() void {
         .load_op = sdl.GPU_LOADOP_LOAD,
         .store_op = sdl.GPU_STOREOP_STORE,
         .mip_level = 0,
-        .texture = Graphics.fsaa_target,
+        .texture = if (Graphics.render_fsaa) Graphics.fsaa_target else Graphics.render_target,
     }, 1, &.{
         .clear_depth = 0.0,
         .load_op = sdl.GPU_LOADOP_CLEAR,
@@ -257,22 +269,24 @@ pub fn endDraw() void {
     if (Graphics.render_pass) |pass| {
         sdl.EndGPURenderPass(pass);
 
-        if (Graphics.fsaa_level > 1) sdl.GenerateMipmapsForGPUTexture(Graphics.command_buffer, Graphics.fsaa_target);
-        sdl.BlitGPUTexture(Graphics.command_buffer, &.{
-            .source = .{
-                .texture = Graphics.fsaa_target,
-                .w = Graphics.window_width,
-                .h = Graphics.window_height,
-                .mip_level = fsaa_level - 1,
-            },
-            .destination = .{
-                .texture = Graphics.render_target,
-                .w = Graphics.window_width,
-                .h = Graphics.window_height,
-            },
-            .load_op = sdl.GPU_LOADOP_DONT_CARE,
-            .filter = sdl.GPU_FILTER_NEAREST,
-        });
+        if (Graphics.render_fsaa) {
+            sdl.GenerateMipmapsForGPUTexture(Graphics.command_buffer, Graphics.fsaa_target);
+            sdl.BlitGPUTexture(Graphics.command_buffer, &.{
+                .source = .{
+                    .texture = Graphics.fsaa_target,
+                    .w = Graphics.render_width,
+                    .h = Graphics.render_height,
+                    .mip_level = fsaa_level - 1,
+                },
+                .destination = .{
+                    .texture = Graphics.render_target,
+                    .w = Graphics.render_width,
+                    .h = Graphics.render_height,
+                },
+                .load_op = sdl.GPU_LOADOP_DONT_CARE,
+                .filter = sdl.GPU_FILTER_NEAREST,
+            });
+        }
     }
     if (!sdl.SubmitGPUCommandBuffer(Graphics.command_buffer)) err.sdl();
 }

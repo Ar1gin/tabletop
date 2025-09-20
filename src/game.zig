@@ -116,6 +116,18 @@ fn processEvents() void {
                 sdl.EVENT_MOUSE_WHEEL => {
                     Game.mouse.wheel += event.wheel.integer_y;
                 },
+                sdl.EVENT_WINDOW_RESIZED => {
+                    if (event.window.data1 < 1 or event.window.data2 < 1) continue;
+
+                    Graphics.window_width = @intCast(event.window.data1);
+                    Graphics.window_height = @intCast(event.window.data2);
+                },
+                sdl.EVENT_WINDOW_PIXEL_SIZE_CHANGED => {
+                    if (event.window.data1 < 1 or event.window.data2 < 1) continue;
+
+                    Graphics.pixel_width = @intCast(event.window.data1);
+                    Graphics.pixel_height = @intCast(event.window.data2);
+                },
                 else => {},
             }
         }
