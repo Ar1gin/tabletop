@@ -2,6 +2,7 @@ const std = @import("std");
 const sdl = @import("sdl");
 const err = @import("error.zig");
 const presets = @import("graphics/presets.zig");
+const Game = @import("game.zig");
 const Assets = @import("assets.zig");
 
 pub const Transform = @import("graphics/transform.zig");
@@ -14,6 +15,7 @@ var command_buffer: ?*sdl.GPUCommandBuffer = null;
 var render_pass: ?*sdl.GPURenderPass = null;
 var render_target: ?*sdl.GPUTexture = null;
 var render_fsaa: bool = undefined;
+var batches: Batches = undefined;
 
 var shader_vert: *sdl.GPUShader = undefined;
 var shader_frag: *sdl.GPUShader = undefined;
@@ -37,6 +39,18 @@ const BYTES_PER_VERTEX = 5 * 4;
 const DEPTH_FORMAT = sdl.GPU_TEXTUREFORMAT_D32_FLOAT;
 pub const TRANSFER_BUFFER_DEFAULT_CAPACITY = 512 * 1024;
 pub const MIP_LEVEL = 4;
+
+const Batch = struct {
+    object: *Assets.Object,
+    transform: Transform,
+    z: f32,
+
+    fn orderLessThan(ctx: void, lhs: Batch, rhs: Batch) bool {
+        _ = ctx;
+        return lhs.z > rhs.z;
+    }
+};
+const Batches = std.ArrayListUnmanaged(Batch);
 
 const Graphics = @This();
 pub fn create() void {
@@ -150,6 +164,8 @@ pub fn create() void {
         },
     }) orelse err.sdl();
 
+    Graphics.batches = Batches.empty;
+
     Graphics.camera = Camera{
         .transform = .{},
         .near = 1.0 / 16.0,
@@ -175,6 +191,7 @@ pub fn destroy() void {
         Graphics.command_buffer = null;
     }
     sdl.DestroyGPUDevice(Graphics.device);
+    Graphics.batches.clearAndFree(Game.alloc);
 }
 
 /// If window is minimized returns `false`, `render_pass` remains null
@@ -219,8 +236,35 @@ pub fn beginDraw() bool {
     return true;
 }
 
-pub fn clearDepth() void {
+fn finishPass() void {
+    std.sort.block(Batch, Graphics.batches.items, {}, Batch.orderLessThan);
+
+    for (Graphics.batches.items) |*batch| {
+        const asset_object = batch.object.get() orelse continue;
+
+        sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &batch.transform.matrix(), 16 * 4);
+        for (asset_object.nodes) |node| {
+            const mesh = &asset_object.meshes[node.mesh];
+
+            for (mesh.primitives) |*primitive| {
+                const asset_texture = primitive.texture.get() orelse continue;
+                sdl.BindGPUFragmentSamplers(Graphics.render_pass, 0, &sdl.GPUTextureSamplerBinding{
+                    .texture = asset_texture.texture,
+                    .sampler = asset_texture.sampler,
+                }, 1);
+                sdl.BindGPUVertexBuffers(Graphics.render_pass, 0, &.{ .offset = 0, .buffer = primitive.vertex_buffer }, 1);
+                sdl.BindGPUIndexBuffer(Graphics.render_pass, &.{ .buffer = primitive.index_buffer }, sdl.GPU_INDEXELEMENTSIZE_16BIT);
+                sdl.DrawGPUIndexedPrimitives(Graphics.render_pass, primitive.indices, 1, 0, 0, 0);
+            }
+        }
+    }
+    Graphics.batches.clearRetainingCapacity();
+
     sdl.EndGPURenderPass(Graphics.render_pass.?);
+}
+
+pub fn clearDepth() void {
+    Graphics.finishPass();
 
     Graphics.render_pass = sdl.BeginGPURenderPass(Graphics.command_buffer.?, &.{
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
@@ -242,51 +286,51 @@ pub fn clearDepth() void {
     sdl.PushGPUVertexUniformData(Graphics.command_buffer, 0, &Graphics.camera.matrix, 16 * 4);
 }
 
+// `object`: pointer MUST be vaild until current render pass ends
 pub fn drawObject(object: *Assets.Object, transform: Transform) void {
     if (Graphics.render_pass == null) return;
-    const asset_object = object.get() orelse return;
 
-    sdl.PushGPUVertexUniformData(Graphics.command_buffer, 1, &transform.matrix(), 16 * 4);
-    for (asset_object.nodes) |node| {
-        const mesh = &asset_object.meshes[node.mesh];
+    @setFloatMode(.optimized);
+    const z = Graphics.camera.matrix[8] * transform.position[0] +
+        Graphics.camera.matrix[9] * transform.position[1] +
+        Graphics.camera.matrix[10] * transform.position[2] +
+        Graphics.camera.matrix[11];
+    var w = Graphics.camera.matrix[12] * transform.position[0] +
+        Graphics.camera.matrix[13] * transform.position[1] +
+        Graphics.camera.matrix[14] * transform.position[2] +
+        Graphics.camera.matrix[15];
+    if (w == 0) w = 1;
 
-        for (mesh.primitives) |*primitive| {
-            const asset_texture = primitive.texture.get() orelse continue;
-            sdl.BindGPUFragmentSamplers(Graphics.render_pass, 0, &sdl.GPUTextureSamplerBinding{
-                .texture = asset_texture.texture,
-                .sampler = asset_texture.sampler,
-            }, 1);
-            sdl.BindGPUVertexBuffers(Graphics.render_pass, 0, &.{ .offset = 0, .buffer = primitive.vertex_buffer }, 1);
-            sdl.BindGPUIndexBuffer(Graphics.render_pass, &.{ .buffer = primitive.index_buffer }, sdl.GPU_INDEXELEMENTSIZE_16BIT);
-            sdl.DrawGPUIndexedPrimitives(Graphics.render_pass, primitive.indices, 1, 0, 0, 0);
-        }
-    }
+    Graphics.batches.append(Game.alloc, .{
+        .object = object,
+        .transform = transform,
+        .z = z / w,
+    }) catch err.oom();
 }
 
 pub fn endDraw() void {
     defer Graphics.command_buffer = null;
     defer Graphics.render_pass = null;
-    if (Graphics.render_pass) |pass| {
-        sdl.EndGPURenderPass(pass);
 
-        if (Graphics.render_fsaa) {
-            sdl.GenerateMipmapsForGPUTexture(Graphics.command_buffer, Graphics.fsaa_target);
-            sdl.BlitGPUTexture(Graphics.command_buffer, &.{
-                .source = .{
-                    .texture = Graphics.fsaa_target,
-                    .w = Graphics.render_width,
-                    .h = Graphics.render_height,
-                    .mip_level = fsaa_level - 1,
-                },
-                .destination = .{
-                    .texture = Graphics.render_target,
-                    .w = Graphics.render_width,
-                    .h = Graphics.render_height,
-                },
-                .load_op = sdl.GPU_LOADOP_DONT_CARE,
-                .filter = sdl.GPU_FILTER_NEAREST,
-            });
-        }
+    Graphics.finishPass();
+
+    if (Graphics.render_fsaa) {
+        sdl.GenerateMipmapsForGPUTexture(Graphics.command_buffer, Graphics.fsaa_target);
+        sdl.BlitGPUTexture(Graphics.command_buffer, &.{
+            .source = .{
+                .texture = Graphics.fsaa_target,
+                .w = Graphics.render_width,
+                .h = Graphics.render_height,
+                .mip_level = fsaa_level - 1,
+            },
+            .destination = .{
+                .texture = Graphics.render_target,
+                .w = Graphics.render_width,
+                .h = Graphics.render_height,
+            },
+            .load_op = sdl.GPU_LOADOP_DONT_CARE,
+            .filter = sdl.GPU_FILTER_NEAREST,
+        });
     }
     if (!sdl.SubmitGPUCommandBuffer(Graphics.command_buffer)) err.sdl();
 }
