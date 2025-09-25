@@ -29,13 +29,14 @@ pub fn load(path: []const u8, alloc: std.mem.Allocator) Assets.LoadError!@This()
     const bytes_per_pixel = 4;
     const mip_level = if (std.math.isPowerOfTwo(width) and width == height) @as(u32, Graphics.MIP_LEVEL) else @as(u32, 1);
 
-    const texture = Graphics.createTexture(
-        width,
-        height,
-        target_format,
-        sdl.GPU_TEXTUREUSAGE_SAMPLER | sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
-        mip_level,
-    );
+    const texture = sdl.CreateGPUTexture(Graphics.device, &.{
+        .width = width,
+        .height = height,
+        .layer_count_or_depth = 1,
+        .format = target_format,
+        .usage = sdl.GPU_TEXTUREUSAGE_SAMPLER | sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
+        .num_levels = mip_level,
+    }) orelse err.sdl();
     errdefer Graphics.freeTexture(texture);
 
     const transfer_buffer_capacity = Graphics.TRANSFER_BUFFER_DEFAULT_CAPACITY;

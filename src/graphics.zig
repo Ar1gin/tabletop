@@ -14,22 +14,20 @@ pub var device: *sdl.GPUDevice = undefined;
 var command_buffer: ?*sdl.GPUCommandBuffer = null;
 var render_pass: ?*sdl.GPURenderPass = null;
 var render_target: ?*sdl.GPUTexture = null;
-var render_fsaa: bool = undefined;
 var batches: Batches = undefined;
 
 var shader_vert: *sdl.GPUShader = undefined;
 var shader_frag: *sdl.GPUShader = undefined;
 
 var depth_texture: *sdl.GPUTexture = undefined;
-var fsaa_target: *sdl.GPUTexture = undefined;
+var antialias: Antialias = undefined;
+var aa_target: *sdl.GPUTexture = undefined;
 var pipeline: *sdl.GPUGraphicsPipeline = undefined;
 
 pub var window_width: u32 = undefined;
 pub var window_height: u32 = undefined;
 pub var pixel_width: u32 = undefined;
 pub var pixel_height: u32 = undefined;
-var fsaa_scale: u32 = 4;
-var fsaa_level: u32 = 3;
 var render_width: u32 = undefined;
 var render_height: u32 = undefined;
 
@@ -39,6 +37,41 @@ const BYTES_PER_VERTEX = 5 * 4;
 const DEPTH_FORMAT = sdl.GPU_TEXTUREFORMAT_D32_FLOAT;
 pub const TRANSFER_BUFFER_DEFAULT_CAPACITY = 512 * 1024;
 pub const MIP_LEVEL = 4;
+
+const Antialias = union(enum) {
+    none,
+    msaa: enum(sdl.GPUSampleCount) {
+        @"2" = sdl.GPU_SAMPLECOUNT_2,
+        @"4" = sdl.GPU_SAMPLECOUNT_4,
+        @"8" = sdl.GPU_SAMPLECOUNT_8,
+    },
+    fsaa: enum {
+        @"2",
+        @"4",
+        @"8",
+    },
+
+    pub fn getMsaaSamples(self: @This()) sdl.GPUSampleCount {
+        if (self != .msaa) return sdl.GPU_SAMPLECOUNT_1;
+        return @intFromEnum(self.msaa);
+    }
+    pub fn getFsaaScale(self: @This()) u8 {
+        if (self != .fsaa) return 1;
+        return switch (self.fsaa) {
+            .@"2" => 2,
+            .@"4" => 4,
+            .@"8" => 8,
+        };
+    }
+    pub fn getFsaaLevel(self: @This()) u8 {
+        if (self != .fsaa) return 1;
+        return switch (self.fsaa) {
+            .@"2" => 2,
+            .@"4" => 3,
+            .@"8" => 4,
+        };
+    }
+};
 
 const Batch = struct {
     object: *Assets.Object,
@@ -76,6 +109,8 @@ pub fn create() void {
     Graphics.render_width = pixel_width;
     Graphics.render_height = pixel_height;
 
+    Graphics.antialias = .none;
+
     // Device
     Graphics.device = sdl.CreateGPUDevice(
         sdl.GPU_SHADERFORMAT_SPIRV,
@@ -109,20 +144,24 @@ pub fn create() void {
     const target_format = sdl.GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
     if (target_format == sdl.GPU_TEXTUREFORMAT_INVALID) err.sdl();
 
-    Graphics.depth_texture = createTexture(
-        @as(u32, @intCast(Graphics.render_width)) * Graphics.fsaa_scale,
-        @as(u32, @intCast(Graphics.render_height)) * Graphics.fsaa_scale,
-        DEPTH_FORMAT,
-        sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
-        1,
-    );
-    Graphics.fsaa_target = createTexture(
-        @as(u32, @intCast(Graphics.render_width)) * Graphics.fsaa_scale,
-        @as(u32, @intCast(Graphics.render_height)) * Graphics.fsaa_scale,
-        target_format,
-        sdl.GPU_TEXTUREUSAGE_COLOR_TARGET | sdl.GPU_TEXTUREUSAGE_SAMPLER,
-        fsaa_level,
-    );
+    Graphics.depth_texture = sdl.CreateGPUTexture(device, &.{
+        .width = Graphics.render_width * Graphics.antialias.getFsaaScale(),
+        .height = Graphics.render_height * Graphics.antialias.getFsaaScale(),
+        .layer_count_or_depth = 1,
+        .format = DEPTH_FORMAT,
+        .usage = sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+        .num_levels = 1,
+        .sample_count = Graphics.antialias.getMsaaSamples(),
+    }) orelse err.sdl();
+    Graphics.aa_target = sdl.CreateGPUTexture(device, &.{
+        .width = Graphics.render_width * Graphics.antialias.getFsaaScale(),
+        .height = Graphics.render_height * Graphics.antialias.getFsaaScale(),
+        .layer_count_or_depth = 1,
+        .format = target_format,
+        .usage = if (Graphics.antialias == .fsaa) sdl.GPU_TEXTUREUSAGE_COLOR_TARGET | sdl.GPU_TEXTUREUSAGE_SAMPLER else sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
+        .num_levels = Graphics.antialias.getFsaaLevel(),
+        .sample_count = Graphics.antialias.getMsaaSamples(),
+    }) orelse err.sdl();
 
     Graphics.pipeline = sdl.CreateGPUGraphicsPipeline(Graphics.device, &.{
         .vertex_shader = Graphics.shader_vert,
@@ -149,6 +188,9 @@ pub fn create() void {
                 },
             },
             .num_vertex_attributes = 2,
+        },
+        .multisample_state = .{
+            .sample_count = Graphics.antialias.getMsaaSamples(),
         },
         .primitive_type = sdl.GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = presets.RASTERIZER_CULL,
@@ -180,7 +222,7 @@ pub fn destroy() void {
     sdl.DestroyWindow(Graphics.window);
 
     sdl.ReleaseGPUGraphicsPipeline(Graphics.device, Graphics.pipeline);
-    sdl.ReleaseGPUTexture(Graphics.device, Graphics.fsaa_target);
+    sdl.ReleaseGPUTexture(Graphics.device, Graphics.aa_target);
     sdl.ReleaseGPUTexture(Graphics.device, Graphics.depth_texture);
 
     sdl.ReleaseGPUShader(Graphics.device, Graphics.shader_vert);
@@ -212,14 +254,14 @@ pub fn beginDraw() bool {
         Graphics.camera.aspect = @as(f32, @floatFromInt(Graphics.render_width)) / @as(f32, @floatFromInt(Graphics.render_height));
     }
 
-    Graphics.render_fsaa = Graphics.fsaa_level > 1;
     Graphics.render_pass = sdl.BeginGPURenderPass(Graphics.command_buffer.?, &.{
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
         .cycle = false,
-        .load_op = sdl.GPU_LOADOP_CLEAR,
-        .store_op = sdl.GPU_STOREOP_STORE,
+        .load_op = sdl.GPU_LOADOP_DONT_CARE,
+        .store_op = if (Graphics.antialias == .msaa) sdl.GPU_STOREOP_RESOLVE else sdl.GPU_STOREOP_STORE,
         .mip_level = 0,
-        .texture = if (Graphics.render_fsaa) Graphics.fsaa_target else Graphics.render_target,
+        .texture = if (Graphics.antialias == .fsaa or Graphics.antialias == .msaa) Graphics.aa_target else Graphics.render_target,
+        .resolve_texture = if (Graphics.antialias == .msaa) Graphics.render_target else null,
     }, 1, &.{
         .clear_depth = 0.0,
         .load_op = sdl.GPU_LOADOP_CLEAR,
@@ -270,9 +312,10 @@ pub fn clearDepth() void {
         .clear_color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
         .cycle = false,
         .load_op = sdl.GPU_LOADOP_LOAD,
-        .store_op = sdl.GPU_STOREOP_STORE,
+        .store_op = if (Graphics.antialias == .msaa) sdl.GPU_STOREOP_RESOLVE else sdl.GPU_STOREOP_STORE,
         .mip_level = 0,
-        .texture = if (Graphics.render_fsaa) Graphics.fsaa_target else Graphics.render_target,
+        .texture = if (Graphics.antialias == .fsaa or Graphics.antialias == .msaa) Graphics.aa_target else Graphics.render_target,
+        .resolve_texture = if (Graphics.antialias == .msaa) Graphics.render_target else null,
     }, 1, &.{
         .clear_depth = 0.0,
         .load_op = sdl.GPU_LOADOP_CLEAR,
@@ -314,14 +357,14 @@ pub fn endDraw() void {
 
     Graphics.finishPass();
 
-    if (Graphics.render_fsaa) {
-        sdl.GenerateMipmapsForGPUTexture(Graphics.command_buffer, Graphics.fsaa_target);
+    if (Graphics.antialias == .fsaa) {
+        sdl.GenerateMipmapsForGPUTexture(Graphics.command_buffer, Graphics.aa_target);
         sdl.BlitGPUTexture(Graphics.command_buffer, &.{
             .source = .{
-                .texture = Graphics.fsaa_target,
+                .texture = Graphics.aa_target,
                 .w = Graphics.render_width,
                 .h = Graphics.render_height,
-                .mip_level = fsaa_level - 1,
+                .mip_level = Graphics.antialias.getFsaaLevel() - 1,
             },
             .destination = .{
                 .texture = Graphics.render_target,
@@ -348,18 +391,6 @@ fn loadShader(path: []const u8, info: sdl.GPUShaderCreateInfo) *sdl.GPUShader {
     return sdl.CreateGPUShader(device, &updated_info) orelse err.sdl();
 }
 
-pub fn createTexture(width: u32, height: u32, format: c_uint, usage: c_uint, mip_level: u32) *sdl.GPUTexture {
-    return sdl.CreateGPUTexture(device, &.{
-        .format = format,
-        .layer_count_or_depth = 1,
-        .width = width,
-        .height = height,
-        .num_levels = mip_level,
-        .sample_count = sdl.GPU_SAMPLECOUNT_1,
-        .usage = usage,
-    }) orelse err.sdl();
-}
-
 pub fn freeTexture(texture: *sdl.GPUTexture) void {
     sdl.ReleaseGPUTexture(Graphics.device, texture);
 }
@@ -384,24 +415,32 @@ pub fn freeSampler(sampler: *sdl.GPUSampler) void {
 
 fn resetTextures(width: u32, height: u32) void {
     sdl.ReleaseGPUTexture(Graphics.device, Graphics.depth_texture);
-    Graphics.depth_texture = createTexture(
-        width * Graphics.fsaa_scale,
-        height * Graphics.fsaa_scale,
-        DEPTH_FORMAT,
-        sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
-        1,
-    );
+    Graphics.depth_texture = sdl.CreateGPUTexture(device, &.{
+        .width = width * Graphics.antialias.getFsaaScale(),
+        .height = height * Graphics.antialias.getFsaaScale(),
+        .layer_count_or_depth = 1,
+        .format = DEPTH_FORMAT,
+        .usage = sdl.GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+        .num_levels = 1,
+        .sample_count = Graphics.antialias.getMsaaSamples(),
+    }) orelse err.sdl();
 
     const target_format = sdl.GetGPUSwapchainTextureFormat(Graphics.device, Graphics.window);
 
-    sdl.ReleaseGPUTexture(Graphics.device, Graphics.fsaa_target);
-    Graphics.fsaa_target = createTexture(
-        width * Graphics.fsaa_scale,
-        height * Graphics.fsaa_scale,
-        target_format,
-        sdl.GPU_TEXTUREUSAGE_COLOR_TARGET | sdl.GPU_TEXTUREUSAGE_SAMPLER,
-        fsaa_level,
-    );
+    sdl.ReleaseGPUTexture(Graphics.device, Graphics.aa_target);
+    Graphics.aa_target = sdl.CreateGPUTexture(device, &.{
+        .width = width * Graphics.antialias.getFsaaScale(),
+        .height = height * Graphics.antialias.getFsaaScale(),
+        .layer_count_or_depth = 1,
+        .format = target_format,
+        .usage = switch (Graphics.antialias) {
+            .none => sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
+            .fsaa => sdl.GPU_TEXTUREUSAGE_COLOR_TARGET | sdl.GPU_TEXTUREUSAGE_SAMPLER,
+            .msaa => sdl.GPU_TEXTUREUSAGE_COLOR_TARGET,
+        },
+        .num_levels = Graphics.antialias.getFsaaLevel(),
+        .sample_count = Graphics.antialias.getMsaaSamples(),
+    }) orelse err.sdl();
 }
 
 pub fn windowId() sdl.WindowID {
